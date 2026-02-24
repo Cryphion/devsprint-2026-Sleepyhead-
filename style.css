@@ -1,0 +1,80 @@
+body {
+    font-family: 'Inter', sans-serif;
+    margin: 0;
+    background: #0f172a;
+    color: white;
+}
+
+header {
+    background: #1e293b;
+    padding: 20px;
+    text-align: center;
+}
+
+nav {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    background: #111827;
+    padding: 10px;
+}
+
+nav button {
+    padding: 8px 20px;
+    background: #6366f1;
+    border: none;
+    color: white;
+    cursor: pointer;
+    border-radius: 6px;
+}
+
+.section {
+    display: none;
+    padding: 40px;
+    text-align: center;
+}
+
+.section.active {
+    display: block;
+}
+
+input {
+    padding: 10px;
+    margin: 10px;
+    border-radius: 5px;
+    border: none;
+}
+
+.menu button {
+    padding: 15px;
+    margin: 10px;
+    background: #22c55e;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.statusBox {
+    margin-top: 20px;
+    padding: 20px;
+    background: #1e293b;
+    border-radius: 10px;
+}
+
+.healthGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.service {
+    padding: 20px;
+    background: green;
+    border-radius: 10px;
+    font-weight: bold;
+}
+
+.service.dead {
+    background: red;
+}
