@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  identity-provider:
+    build: ./identity-provider
+    ports:
+      - "3001:3001"
+
+  order-gateway:
+    build: ./order-gateway
+    ports:
+      - "3002:3002"
+    depends_on:
+      - identity-provider
+      - stock-service
+
+  stock-service:
+    build: ./stock-service
+    ports:
+      - "3003:3003"
+
+  kitchen-queue:
+    build: ./kitchen-queue
+    ports:
+      - "3004:3004"
+
+  notification-hub:
+    build: ./notification-hub
+    ports:
+      - "3005:3005"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - order-gateway
