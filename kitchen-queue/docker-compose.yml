@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+
+  # ── RabbitMQ ──────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    ports:
+      - "5672:5672"    # AMQP protocol
+      - "15672:15672"  # Management UI → http://localhost:15672 (guest/guest)
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+
+  # ── Kitchen Service ───────────────────────────────────────────
+  kitchen-service:
+    build: ./kitchen-service
+    ports:
+      - "3002:3002"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - PORT=3002
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - REDIS_URL=redis://redis:6379
+      - NOTIFICATION_URL=http://notification-service:3000
+      - COOKING_TIME_MIN=3000
+      - COOKING_TIME_MAX=7000
+    restart: on-failure
+
+  # ── Redis (shared with other services) ───────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  rabbitmq_data:
