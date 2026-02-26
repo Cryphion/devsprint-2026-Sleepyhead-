@@ -1,0 +1,49 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies (Identity Provider)
+        working-directory: ./identity-provider
+        run: npm install
+
+      - name: Run tests (Identity Provider)
+        working-directory: ./identity-provider
+        run: npm test
+
+      # Repeat the two steps above for each service as you build them out
+      # - name: Install dependencies (Order Gateway)
+      #   working-directory: ./order-gateway
+      #   run: npm install
+      # - name: Run tests (Order Gateway)
+      #   working-directory: ./order-gateway
+      #   run: npm test
+
+  docker-build:
+    name: Verify Docker Compose Builds
+    runs-on: ubuntu-latest
+    needs: test   # only runs if tests pass
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build all Docker images
+        run: docker compose build
