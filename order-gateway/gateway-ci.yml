@@ -1,0 +1,225 @@
+name: Gateway Service CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  IMAGE_NAME: order-gateway-service
+  REGISTRY: ghcr.io
+
+jobs:
+  # ─────────────────────────────────────────
+  # JOB 1: Lint & Unit Tests
+  # ─────────────────────────────────────────
+  test:
+    name: 🧪 Lint & Test
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: gateway-service/package-lock.json
+
+      - name: Install dependencies
+        working-directory: gateway-service
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: gateway-service
+        run: npm run lint
+
+      - name: Run unit tests
+        working-directory: gateway-service
+        env:
+          JWT_SECRET: test-secret-key
+          REDIS_URL: redis://localhost:6379
+          NODE_ENV: test
+        run: npm test -- --coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: gateway-service/coverage/
+          retention-days: 7
+
+  # ─────────────────────────────────────────
+  # JOB 2: Integration Tests
+  # ─────────────────────────────────────────
+  integration:
+    name: 🔗 Integration Tests
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start services via docker-compose
+        run: |
+          docker compose -f docker-compose.test.yml up -d
+          sleep 10  # Wait for services to be healthy
+
+      - name: Wait for gateway health check
+        run: |
+          for i in {1..15}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health)
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ Gateway is up"
+              exit 0
+            fi
+            echo "Attempt $i: status=$STATUS, retrying..."
+            sleep 3
+          done
+          echo "❌ Gateway never became healthy"
+          docker compose -f docker-compose.test.yml logs
+          exit 1
+
+      - name: Run integration tests
+        env:
+          GATEWAY_URL: http://localhost:5000
+          JWT_SECRET: test-secret-key
+        run: |
+          cd gateway-service
+          npm run test:integration
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.test.yml logs
+
+      - name: Teardown
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
+
+  # ─────────────────────────────────────────
+  # JOB 3: Build & Push Docker Image
+  # ─────────────────────────────────────────
+  build:
+    name: 🐳 Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [test, integration]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.push.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push image
+        id: push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./gateway-service
+          file: ./gateway-service/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────────
+  # JOB 4: Security Scan
+  # ─────────────────────────────────────────
+  security:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:latest
+          format: "table"
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: "CRITICAL,HIGH"
+
+  # ─────────────────────────────────────────
+  # JOB 5: Deploy to Staging
+  # ─────────────────────────────────────────
+  deploy-staging:
+    name: 🚀 Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build, security]
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/devsprint
+            docker compose pull gateway-service
+            docker compose up -d --no-deps gateway-service
+            echo "✅ Gateway deployed to staging"
+
+      - name: Smoke test staging
+        run: |
+          sleep 5
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://${{ secrets.STAGING_HOST }}/health)
+          if [ "$STATUS" != "200" ]; then
+            echo "❌ Staging health check failed: $STATUS"
+            exit 1
+          fi
+          echo "✅ Staging is healthy"
+
+      - name: Notify on success
+        if: success()
+        run: |
+          echo "🎉 Gateway v$(cat gateway-service/package.json | jq -r .version) deployed to staging"

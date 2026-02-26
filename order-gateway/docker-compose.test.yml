@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  gateway-service:
+    build:
+      context: ./gateway-service
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - JWT_SECRET=test-secret-key
+      - REDIS_URL=redis://redis:6379
+      - STOCK_SERVICE_URL=http://stock-mock:5001
+      - KITCHEN_SERVICE_URL=http://kitchen-mock:5002
+      - NODE_ENV=test
+    depends_on:
+      redis:
+        condition: service_healthy
+      stock-mock:
+        condition: service_started
+      kitchen-mock:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Lightweight mock for Stock Service
+  stock-mock:
+    image: node:18-alpine
+    working_dir: /app
+    volumes:
+      - ./mocks/stock-mock.js:/app/server.js
+    command: node server.js
+    ports:
+      - "5001:5001"
+
+  # Lightweight mock for Kitchen Service
+  kitchen-mock:
+    image: node:18-alpine
+    working_dir: /app
+    volumes:
+      - ./mocks/kitchen-mock.js:/app/server.js
+    command: node server.js
+    ports:
+      - "5002:5002"
