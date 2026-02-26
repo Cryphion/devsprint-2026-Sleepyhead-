@@ -1,37 +1,269 @@
 version: "3.9"
 
+# ─────────────────────────────────────────────
+#  DevSprint 2026 — IUT Cafeteria Microservices
+#  Run everything:  docker compose up --build
+# ─────────────────────────────────────────────
+
+networks:
+  cafeteria-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+  rabbit-data:
+  postgres-data:
+
 services:
+
+  # ─────────────────────────────────────────
+  # INFRASTRUCTURE
+  # ─────────────────────────────────────────
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - cafeteria-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI  →  http://localhost:15672  (guest/guest)
+    volumes:
+      - rabbit-data:/var/lib/rabbitmq
+    networks:
+      - cafeteria-net
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cafeteria
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: cafeteria_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - cafeteria-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cafeteria"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # SERVICE 1 — Identity Provider
+  # Handles login, issues JWT tokens
+  # ─────────────────────────────────────────
   identity-provider:
-    build: ./identity-provider
+    build:
+      context: ./identity-provider
+      dockerfile: Dockerfile
+    container_name: identity-provider
+    restart: unless-stopped
     ports:
       - "3001:3001"
+    environment:
+      PORT: 3001
+      JWT_SECRET: super_secret_jwt_key_change_in_prod
+      JWT_EXPIRES_IN: 1h
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: cafeteria
+      DB_PASSWORD: secret
+      DB_NAME: cafeteria_db
+      REDIS_URL: redis://redis:6379
+      # Rate limiting: 3 login attempts per student per minute
+      RATE_LIMIT_MAX: 3
+      RATE_LIMIT_WINDOW_MS: 60000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cafeteria-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
+  # ─────────────────────────────────────────
+  # SERVICE 2 — Order Gateway
+  # API Gateway: validates JWT, checks cache,
+  # routes requests to downstream services
+  # ─────────────────────────────────────────
   order-gateway:
-    build: ./order-gateway
+    build:
+      context: ./order-gateway
+      dockerfile: Dockerfile
+    container_name: order-gateway
+    restart: unless-stopped
+    ports:
+      - "3000:3000"   # ← main entry point for the frontend
+    environment:
+      PORT: 3000
+      JWT_SECRET: super_secret_jwt_key_change_in_prod
+      REDIS_URL: redis://redis:6379
+      STOCK_SERVICE_URL: http://stock-service:3002
+      KITCHEN_QUEUE_URL: http://kitchen-queue:3003
+      IDENTITY_PROVIDER_URL: http://identity-provider:3001
+    depends_on:
+      identity-provider:
+        condition: service_healthy
+      stock-service:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cafeteria-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # SERVICE 3 — Stock Service
+  # Source of truth for inventory.
+  # Uses optimistic locking + Redis cache layer
+  # ─────────────────────────────────────────
+  stock-service:
+    build:
+      context: ./stock-service
+      dockerfile: Dockerfile
+    container_name: stock-service
+    restart: unless-stopped
     ports:
       - "3002:3002"
+    environment:
+      PORT: 3002
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: cafeteria
+      DB_PASSWORD: secret
+      DB_NAME: cafeteria_db
+      REDIS_URL: redis://redis:6379
+      CACHE_TTL_SECONDS: 30
     depends_on:
-      - identity-provider
-      - stock-service
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cafeteria-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3002/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
-  stock-service:
-    build: ./stock-service
+  # ─────────────────────────────────────────
+  # SERVICE 4 — Kitchen Queue
+  # Async order processing via RabbitMQ.
+  # ACKs the student in <2s, processes in 3-7s
+  # ─────────────────────────────────────────
+  kitchen-queue:
+    build:
+      context: ./kitchen-queue
+      dockerfile: Dockerfile
+    container_name: kitchen-queue
+    restart: unless-stopped
     ports:
       - "3003:3003"
+    environment:
+      PORT: 3003
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      STOCK_SERVICE_URL: http://stock-service:3002
+      NOTIFICATION_HUB_URL: http://notification-hub:3004
+      # Simulated prep time range (ms)
+      PREP_TIME_MIN_MS: 3000
+      PREP_TIME_MAX_MS: 7000
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      stock-service:
+        condition: service_healthy
+    networks:
+      - cafeteria-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3003/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
-  kitchen-queue:
-    build: ./kitchen-queue
+  # ─────────────────────────────────────────
+  # SERVICE 5 — Notification Hub
+  # Pushes real-time status updates to students
+  # via WebSockets (no client polling needed)
+  # ─────────────────────────────────────────
+  notification-hub:
+    build:
+      context: ./notification-hub
+      dockerfile: Dockerfile
+    container_name: notification-hub
+    restart: unless-stopped
     ports:
       - "3004:3004"
-
-  notification-hub:
-    build: ./notification-hub
-    ports:
-      - "3005:3005"
-
-  frontend:
-    build: ./frontend
-    ports:
-      - "3000:80"
+    environment:
+      PORT: 3004
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
     depends_on:
-      - order-gateway
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cafeteria-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3004/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # FRONTEND — Student UI + Admin Dashboard
+  # Single React SPA served on port 8080
+  # ─────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"    # ← open http://localhost:8080 in your browser
+    environment:
+      VITE_GATEWAY_URL: http://localhost:3000
+      VITE_NOTIFICATION_WS_URL: ws://localhost:3004
+    depends_on:
+      order-gateway:
+        condition: service_healthy
+      notification-hub:
+        condition: service_healthy
+    networks:
+      - cafeteria-net

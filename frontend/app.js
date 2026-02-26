@@ -6,7 +6,7 @@
 'use strict';
 
 /* ── CONFIG ── */
-const API_BASE    = 'http://localhost:5000';
+const API_BASE    = 'http://localhost:3000';
 const CART_KEY    = 'iftarflow_cart';
 const TOKEN_KEY   = 'iftarflow_token';
 const USER_KEY    = 'iftarflow_user';
@@ -64,11 +64,11 @@ const MENU_ITEMS = [
 
 /* ── SERVICE STATE ── */
 const SERVICES = {
-  'identity-provider': { name: 'Identity Provider', port: 5000, up: true, latency: 48 },
-  'order-gateway':     { name: 'Order Gateway',     port: 4000, up: true, latency: 62 },
-  'stock-service':     { name: 'Stock Service',     port: 4001, up: true, latency: 30 },
-  'kitchen-queue':     { name: 'Kitchen Queue',     port: 4002, up: true, latency: 55 },
-  'notification-hub':  { name: 'Notification Hub',  port: 4003, up: true, latency: 22 },
+  'identity-provider': { name: 'Identity Provider', port: 3001, up: true, latency: 48 },
+  'order-gateway':     { name: 'Order Gateway',     port: 3002, up: true, latency: 62 },
+  'stock-service':     { name: 'Stock Service',     port: 3003, up: true, latency: 30 },
+  'kitchen-queue':     { name: 'Kitchen Queue',     port: 3004, up: true, latency: 55 },
+  'notification-hub':  { name: 'Notification Hub',  port: 3005, up: true, latency: 22 },
 };
 
 /* ── SESSION STATE ── */
