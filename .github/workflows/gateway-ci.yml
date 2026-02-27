@@ -147,7 +147,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}
+          images: ghcr.io/cryphion/devsprint-2026-sleepyhead/gateway
           tags: |
             type=ref,event=branch
             type=sha,prefix=sha-,format=short
