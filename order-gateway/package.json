@@ -1,18 +1,35 @@
 {
   "name": "order-gateway",
   "version": "1.0.0",
-  "description": "",
+  "description": "API Gateway for IUT Cafeteria microservices — DevSprint 2026",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "lint": "eslint . --ext .js --ignore-pattern coverage/",
+    "test": "jest --testPathPattern='tests/unit' --coverage",
+    "test:integration": "jest --testPathPattern='tests/integration' --testTimeout=30000 --forceExit"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "dotenv": "^17.3.1",
-    "express": "^5.2.1"
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "ioredis": "^5.3.2",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "jest": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "coverageDirectory": "coverage",
+    "collectCoverageFrom": [
+      "*.js",
+      "!jest.config.js"
+    ]
   }
 }
