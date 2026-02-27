@@ -1,9 +1,9 @@
 version: "3.9"
 
 services:
-  gateway-service:
+  order-gateway:
     build:
-      context: ./gateway-service
+      context: ./order-gateway
       dockerfile: Dockerfile
     ports:
       - "5000:5000"

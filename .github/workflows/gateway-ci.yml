@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 env:
-  IMAGE_NAME: order-gateway-service
+  IMAGE_NAME: order-order-gateway
   REGISTRY: ghcr.io
 
 jobs:
@@ -38,18 +38,18 @@ jobs:
         with:
           node-version: "18"
           cache: "npm"
-          cache-dependency-path: gateway-service/package-lock.json
+          cache-dependency-path: order-gateway/package-lock.json
 
       - name: Install dependencies
-        working-directory: gateway-service
+        working-directory: order-gateway
         run: npm ci
 
       - name: Run ESLint
-        working-directory: gateway-service
+        working-directory: order-gateway
         run: npm run lint
 
       - name: Run unit tests
-        working-directory: gateway-service
+        working-directory: order-gateway
         env:
           JWT_SECRET: test-secret-key
           REDIS_URL: redis://localhost:6379
@@ -60,7 +60,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: gateway-service/coverage/
+          path: order-gateway/coverage/
           retention-days: 7
 
   # ─────────────────────────────────────────
@@ -100,7 +100,7 @@ jobs:
           GATEWAY_URL: http://localhost:5000
           JWT_SECRET: test-secret-key
         run: |
-          cd gateway-service
+          cd order-gateway
           npm run test:integration
 
       - name: Collect logs on failure
@@ -156,8 +156,8 @@ jobs:
         id: push
         uses: docker/build-push-action@v5
         with:
-          context: ./gateway-service
-          file: ./gateway-service/Dockerfile
+          context: ./order-gateway
+          file: ./order-gateway/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -205,8 +205,8 @@ jobs:
           key: ${{ secrets.STAGING_SSH_KEY }}
           script: |
             cd /opt/devsprint
-            docker compose pull gateway-service
-            docker compose up -d --no-deps gateway-service
+            docker compose pull order-gateway
+            docker compose up -d --no-deps order-gateway
             echo "✅ Gateway deployed to staging"
 
       - name: Smoke test staging
@@ -222,4 +222,4 @@ jobs:
       - name: Notify on success
         if: success()
         run: |
-          echo "🎉 Gateway v$(cat gateway-service/package.json | jq -r .version) deployed to staging"
+          echo "🎉 Gateway v$(cat order-gateway/package.json | jq -r .version) deployed to staging"
