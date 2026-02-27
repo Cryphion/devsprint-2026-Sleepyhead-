@@ -1,5 +1,5 @@
 {
-  "name": "order-gateway",
+  "name": "gateway-service",
   "version": "1.0.0",
   "description": "API Gateway for IUT Cafeteria microservices — DevSprint 2026",
   "main": "index.js",

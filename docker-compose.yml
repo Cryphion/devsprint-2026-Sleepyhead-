@@ -116,11 +116,11 @@ services:
   # API Gateway: validates JWT, checks cache,
   # routes requests to downstream services
   # ─────────────────────────────────────────
-  order-gateway:
+  gateway-service:
     build:
-      context: ./order-gateway
+      context: ./gateway-service
       dockerfile: Dockerfile
-    container_name: order-gateway
+    container_name: gateway-service
     restart: unless-stopped
     ports:
       - "3000:3000"   # ← main entry point for the frontend
@@ -261,7 +261,7 @@ services:
       VITE_GATEWAY_URL: http://localhost:3000
       VITE_NOTIFICATION_WS_URL: ws://localhost:3004
     depends_on:
-      order-gateway:
+      gateway-service:
         condition: service_healthy
       notification-hub:
         condition: service_healthy
