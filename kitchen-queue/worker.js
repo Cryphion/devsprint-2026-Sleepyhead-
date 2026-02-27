@@ -43,7 +43,7 @@ async function startWorker() {
         // Re-publish with incremented retry count header
         const headers = { ...msg.properties.headers, "x-retry-count": retryCount + 1 };
         channel.nack(msg, false, false); // remove original
-
+        
         // Re-queue with delay simulation (in production use a delay exchange)
         setTimeout(() => {
           getChannel().sendToQueue(
