@@ -36,7 +36,7 @@ services:
 
   # Lightweight mock for Stock Service
   stock-mock:
-    image: node:18-alpine
+    image: node:20-alpine
     working_dir: /app
     volumes:
       - ./mocks/stock-mock.js:/app/server.js
@@ -46,7 +46,7 @@ services:
 
   # Lightweight mock for Kitchen Service
   kitchen-mock:
-    image: node:18-alpine
+    image: node:20-alpine
     working_dir: /app
     volumes:
       - ./mocks/kitchen-mock.js:/app/server.js
