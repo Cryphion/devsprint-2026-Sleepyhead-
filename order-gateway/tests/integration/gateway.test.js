@@ -5,7 +5,7 @@
 const axios = require("axios");
 const jwt = require("jsonwebtoken");
 
-const GATEWAY_URL = process.env.GATEWAY_URL || "http://localhost:5000";
+const GATEWAY_URL = process.env.GATEWAY_URL || "http://localhost:3000";
 const JWT_SECRET = process.env.JWT_SECRET || "test-secret-key";
 
 // Helper: generate a valid test token

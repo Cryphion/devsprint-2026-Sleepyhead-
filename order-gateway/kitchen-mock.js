@@ -24,4 +24,4 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(5002, () => console.log("Kitchen mock running on :5002"));
+server.listen(3003, () => console.log("Kitchen mock running on :3003"));

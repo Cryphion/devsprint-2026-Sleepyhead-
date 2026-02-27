@@ -39,4 +39,4 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(5001, () => console.log("Stock mock running on :5001"));
+server.listen(3002, () => console.log("Stock mock running on :3002"));

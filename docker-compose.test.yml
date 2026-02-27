@@ -6,12 +6,12 @@ services:
       context: ./order-gateway
       dockerfile: Dockerfile
     ports:
-      - "5000:5000"
+      - "3000:3000"
     environment:
       - JWT_SECRET=test-secret-key
       - REDIS_URL=redis://redis:6379
-      - STOCK_SERVICE_URL=http://stock-mock:5001
-      - KITCHEN_SERVICE_URL=http://kitchen-mock:5002
+      - STOCK_SERVICE_URL=http://stock-mock:3002
+      - KITCHEN_SERVICE_URL=http://kitchen-mock:3003
       - NODE_ENV=test
     depends_on:
       redis:
@@ -21,7 +21,7 @@ services:
       kitchen-mock:
         condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -42,7 +42,7 @@ services:
       - ./mocks/stock-mock.js:/app/server.js
     command: node server.js
     ports:
-      - "5001:5001"
+      - "3002:3002"
 
   # Lightweight mock for Kitchen Service
   kitchen-mock:
@@ -52,4 +52,4 @@ services:
       - ./mocks/kitchen-mock.js:/app/server.js
     command: node server.js
     ports:
-      - "5002:5002"
+      - "3003:3003"
