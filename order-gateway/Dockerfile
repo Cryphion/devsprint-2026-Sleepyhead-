@@ -17,6 +17,9 @@ RUN npm ci --omit=dev
 # ── Stage 2: Final runtime image ───────────────────────
 FROM node:18-alpine AS runtime
 
+RUN apk update && apk upgrade --no-cache  # ← add this
+RUN apk add --no-cache wget
+
 # Install wget for healthcheck (used by docker-compose healthcheck)
 RUN apk add --no-cache wget
 
