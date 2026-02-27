@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 env:
-  IMAGE_NAME: order-gateway
+  IMAGE_NAME: gateway
   REGISTRY: ghcr.io
 
 jobs:
