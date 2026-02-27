@@ -5,7 +5,7 @@
 # ─────────────────────────────────────────────────────────
 
 # ── Stage 1: Install dependencies ──────────────────────
-FROM node:20-alpine AS deps
+FROM node:18-alpine AS deps
 
 WORKDIR /app
 
@@ -15,7 +15,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 # ── Stage 2: Final runtime image ───────────────────────
-FROM node:20-alpine AS runtime
+FROM node:18-alpine AS runtime
 
 RUN apk update && apk upgrade --no-cache  # ← add this
 RUN apk add --no-cache wget
