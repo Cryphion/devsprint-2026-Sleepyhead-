@@ -1,18 +1,24 @@
 {
   "name": "stock-service",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Stock/Inventory microservice for IUT Cafeteria",
+  "main": "server.js",
   "scripts": {
-    "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "test": "jest --forceExit"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "dotenv": "^17.3.1",
-    "express": "^5.2.1"
+    "cors": "^2.8.6",
+    "express": "^4.18.2",
+    "pg": "^8.11.3",
+    "redis": "^4.6.13"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^6.3.4"
   }
 }
