@@ -1,7 +1,14 @@
-FROM node:18-alpine
+FROM node:20-alpine
+
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
-EXPOSE 3000
+
+# Install dependencies first (layer caching)
+COPY package.json ./
+RUN npm install --omit=dev
+
+# Copy source
+COPY src/ ./src/
+
+EXPOSE 3004
+
 CMD ["node", "src/index.js"]
