@@ -16,7 +16,7 @@ COPY package*.json ./
 # Install production dependencies
 # Using npm install instead of npm ci — lock file is regenerated locally
 # Switch back to `npm ci --omit=dev` after committing a fresh package-lock.json
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 
 # Copy source
 COPY src/ ./src/
