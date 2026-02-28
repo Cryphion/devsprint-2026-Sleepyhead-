@@ -7,6 +7,11 @@
     "start": "node server.js",
     "test": "jest --forceExit"
   },
+  "jest": {
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ]
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
