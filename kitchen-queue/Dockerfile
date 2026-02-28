@@ -1,7 +1,25 @@
-FROM node:18-alpine
+# ─────────────────────────────────────────────
+#  Kitchen Queue Service — DevSprint 2026
+#  Port: 3003
+# ─────────────────────────────────────────────
+
+FROM node:20-alpine
+
+# Install wget for healthcheck
+RUN apk add --no-cache wget
+
 WORKDIR /app
+
+# Copy package files first (layer caching)
 COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
+
+# Install production dependencies
+RUN npm ci --omit=dev
+
+# Copy source
+COPY src/ ./src/
+
 EXPOSE 3003
-CMD ["node", "kitchen-queue/index.js"]
+
+# Starts Express server (which also spawns the background worker)
+CMD ["node", "src/index.js"]
