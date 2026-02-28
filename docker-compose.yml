@@ -59,11 +59,12 @@ services:
     environment:
       POSTGRES_USER: cafeteria
       POSTGRES_PASSWORD: secret
-      POSTGRES_DB: cafeteria_db
+      POSTGRES_DB: identity_db        # ← changed from cafeteria_db
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql   # ← added
     networks:
       - cafeteria-net
     healthcheck:
@@ -71,7 +72,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
   # ─────────────────────────────────────────
   # SERVICE 1 — Identity Provider
   # Handles login, issues JWT tokens
@@ -92,7 +92,7 @@ services:
       DB_PORT: 5432
       DB_USER: cafeteria
       DB_PASSWORD: secret
-      DB_NAME: cafeteria_db
+      DB_NAME: identity_db 
       REDIS_URL: redis://redis:6379
       # Rate limiting: 3 login attempts per student per minute
       RATE_LIMIT_MAX: 3
@@ -164,7 +164,7 @@ services:
       DB_PORT: 5432
       DB_USER: cafeteria
       DB_PASSWORD: secret
-      DB_NAME: cafeteria_db
+      DB_NAME: stock_db
       REDIS_URL: redis://redis:6379
       CACHE_TTL_SECONDS: 30
     depends_on:
@@ -198,13 +198,19 @@ services:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       STOCK_SERVICE_URL: http://stock-service:3002
       NOTIFICATION_HUB_URL: http://notification-hub:3004
-      # Simulated prep time range (ms)
       PREP_TIME_MIN_MS: 3000
       PREP_TIME_MAX_MS: 7000
+      DB_HOST: postgres          # ← add these
+      DB_PORT: 5432
+      DB_USER: cafeteria
+      DB_PASSWORD: secret
+      DB_NAME: kitchen_db
     depends_on:
       rabbitmq:
         condition: service_healthy
       stock-service:
+        condition: service_healthy
+      postgres:                  # ← add this too
         condition: service_healthy
     networks:
       - cafeteria-net
@@ -247,22 +253,22 @@ services:
   # ─────────────────────────────────────────
   # FRONTEND — Student UI + Admin Dashboard
   # Single React SPA served on port 8080
-  # ─────────────────────────────────────────
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: frontend
-    restart: unless-stopped
-    ports:
-      - "8080:80"    # ← open http://localhost:8080 in your browser
-    environment:
-      VITE_GATEWAY_URL: http://localhost:3000
-      VITE_NOTIFICATION_WS_URL: ws://localhost:3004
-    depends_on:
-      order-gateway:
-        condition: service_healthy
-      notification-hub:
-        condition: service_healthy
-    networks:
-      - cafeteria-net
+  # # ─────────────────────────────────────────
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: frontend
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8080:80"    # ← open http://localhost:8080 in your browser
+  #   environment:
+  #     VITE_GATEWAY_URL: http://localhost:3000
+  #     VITE_NOTIFICATION_WS_URL: ws://localhost:3004
+  #   depends_on:
+  #     order-gateway:
+  #       condition: service_healthy
+  #     notification-hub:
+  #       condition: service_healthy
+  #   networks:
+  #     - cafeteria-net
