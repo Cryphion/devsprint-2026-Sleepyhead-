@@ -27,16 +27,26 @@ redisClient.connect().catch(console.error);
 const CACHE_TTL = parseInt(process.env.CACHE_TTL_SECONDS) || 30;
 
 // ─── DB Init ──────────────────────────────────────────────────
-async function initDB() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS stocks (
-      id        SERIAL PRIMARY KEY,
-      name      VARCHAR(255) UNIQUE NOT NULL,
-      quantity  INTEGER NOT NULL CHECK (quantity >= 0),
-      version   INTEGER NOT NULL DEFAULT 0
-    )
-  `);
-  console.log("✅ DB table ready");
+async function initDB(retries = 15, delayMs = 3000) {
+  for (let i = 1; i <= retries; i++) {
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS stocks (
+          id        SERIAL PRIMARY KEY,
+          name      VARCHAR(255) UNIQUE NOT NULL,
+          quantity  INTEGER NOT NULL CHECK (quantity >= 0),
+          version   INTEGER NOT NULL DEFAULT 0
+        )
+      `);
+      console.log("✅ DB table ready");
+      return;
+    } catch (err) {
+      console.warn(`⏳ DB not ready (attempt ${i}/${retries}): ${err.message}`);
+      if (i < retries) await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  // Don't exit — /health returns 503 until DB recovers
+  console.error("❌ Could not init DB after all retries. Starting in degraded mode.");
 }
 
 // ─── Cache helpers ────────────────────────────────────────────
@@ -218,11 +228,9 @@ app.delete("/api/stocks/:id", async (req, res) => {
 });
 
 // ─── Start ────────────────────────────────────────────────────
-initDB().then(() => {
-  app.listen(PORT, () => {
-    console.log(`✅ stock-service running on port ${PORT}`);
-  });
-}).catch((err) => {
-  console.error("❌ Failed to init DB:", err);
-  process.exit(1);
+// Start HTTP server immediately so Docker healthcheck can reach /health
+// even while initDB is still retrying in the background.
+app.listen(PORT, () => {
+  console.log(`✅ stock-service running on port ${PORT}`);
 });
+initDB();
