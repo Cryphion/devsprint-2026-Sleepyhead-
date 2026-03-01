@@ -2417,9 +2417,341 @@ document.getElementById('login-pw').addEventListener('keydown', e => { if (e.key
 document.getElementById('login-id').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 
 // ═══════════════════════════════════════════════════════════════════
-//  AUTO-LOGIN from localStorage
+//  ENHANCED RATE LIMITER: 3-MINUTE TIMEOUT + REAL-TIME MONITORING
+// ═══════════════════════════════════════════════════════════════════
+
+// ──────── BACKEND: identity-provider/middleware/rateLimiter.js ────────
+/*
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "3");
+const RATE_LIMIT_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS || "180000"); // 3 minutes default
+const RATE_LIMIT_WINDOW_SECONDS = Math.floor(RATE_LIMIT_WINDOW_MS / 1000);
+
+// In-memory store for real-time monitoring (use Redis for production)
+const rateLimitStore = new Map();
+
+function createRateLimiter(redis) {
+  return async function rateLimiter(req, res, next) {
+    const studentId = req.body?.studentId || req.body?.username || req.ip;
+    const key = `ratelimit:login:${studentId}`;
+    const monitorKey = `monitor:${studentId}`;
+
+    try {
+      // Increment attempt counter
+      const attempts = await redis.incr(key);
+
+      // Set expiry on first attempt (3 minutes)
+      if (attempts === 1) {
+        await redis.expire(key, RATE_LIMIT_WINDOW_SECONDS);
+        // Log attempt in monitoring store
+        rateLimitStore.set(monitorKey, {
+          studentId,
+          attempts: 1,
+          firstAttempt: Date.now(),
+          lastAttempt: Date.now(),
+          blocked: false,
+          unblockTime: null,
+        });
+      } else {
+        // Update monitoring data
+        const monitor = rateLimitStore.get(monitorKey);
+        if (monitor) {
+          monitor.attempts = attempts;
+          monitor.lastAttempt = Date.now();
+        }
+      }
+
+      // Get remaining attempts
+      const remaining = Math.max(0, RATE_LIMIT_MAX - attempts);
+      const ttl = await redis.ttl(key);
+
+      // Set response headers for client real-time monitoring
+      res.setHeader("X-RateLimit-Limit", RATE_LIMIT_MAX);
+      res.setHeader("X-RateLimit-Remaining", remaining);
+      res.setHeader("X-RateLimit-Reset", Math.ceil(Date.now() / 1000) + ttl);
+      res.setHeader("X-RateLimit-Window-Seconds", RATE_LIMIT_WINDOW_SECONDS);
+
+      // Check if limit exceeded
+      if (attempts > RATE_LIMIT_MAX) {
+        const unblockTime = Date.now() + (ttl * 1000);
+        
+        // Update monitoring: account blocked
+        const monitor = rateLimitStore.get(monitorKey);
+        if (monitor) {
+          monitor.blocked = true;
+          monitor.unblockTime = unblockTime;
+        }
+
+        res.setHeader("Retry-After", ttl);
+        return res.status(429).json({
+          code: "RATE_LIMIT_EXCEEDED",
+          message: `Too many login attempts. Account locked for ${ttl} seconds.`,
+          retryAfter: ttl,
+          unblockTime: unblockTime,
+          attempts: attempts,
+          maxAttempts: RATE_LIMIT_MAX,
+          windowSeconds: RATE_LIMIT_WINDOW_SECONDS,
+        });
+      }
+
+      // Pass monitoring data to response
+      res.locals.rateLimit = {
+        studentId,
+        attempts,
+        remaining,
+        maxAttempts: RATE_LIMIT_MAX,
+        windowSeconds: RATE_LIMIT_WINDOW_SECONDS,
+        resetTime: Math.ceil(Date.now() / 1000) + ttl,
+      };
+
+      next();
+    } catch (err) {
+      console.error("[RateLimiter] Redis error, failing open:", err.message);
+      next();
+    }
+  };
+}
+
+// Real-time monitoring endpoint
+function getRateLimitStatus(req, res) {
+  const studentId = req.params.studentId || req.body.studentId;
+  const monitorKey = `monitor:${studentId}`;
+  
+  const monitor = rateLimitStore.get(monitorKey);
+  
+  if (!monitor) {
+    return res.json({
+      status: "clean",
+      attempts: 0,
+      remaining: RATE_LIMIT_MAX,
+      blocked: false,
+    });
+  }
+
+  const now = Date.now();
+  const isBlocked = monitor.blocked && now < monitor.unblockTime;
+  const secondsUntilUnblock = isBlocked ? Math.ceil((monitor.unblockTime - now) / 1000) : 0;
+
+  return res.json({
+    studentId: monitor.studentId,
+    attempts: monitor.attempts,
+    remaining: Math.max(0, RATE_LIMIT_MAX - monitor.attempts),
+    blocked: isBlocked,
+    unblockIn: secondsUntilUnblock,
+    firstAttempt: new Date(monitor.firstAttempt).toISOString(),
+    lastAttempt: new Date(monitor.lastAttempt).toISOString(),
+  });
+}
+
+// Cleanup: remove expired entries from monitoring store
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of rateLimitStore.entries()) {
+    // Remove entries older than 5 minutes
+    if (now - value.firstAttempt > 5 * 60 * 1000) {
+      rateLimitStore.delete(key);
+    }
+  }
+}, 60 * 1000); // Cleanup every minute
+
+module.exports = { createRateLimiter, getRateLimitStatus, rateLimitStore, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_SECONDS };
+*/
+
+
+const rateLimitTracker = {
+  maxAttempts: 3,
+  windowMs: 180000, // 3 minutes
+  
+  getKey(studentId) {
+    return `ratelimit:${studentId}`;
+  },
+  
+  getAttempts(studentId) {
+    const data = localStorage.getItem(this.getKey(studentId));
+    if (!data) return { attempts: 0, firstTime: null, blocked: false };
+    
+    try {
+      const parsed = JSON.parse(data);
+      const now = Date.now();
+      
+      // Check if window has expired
+      if (now - parsed.firstTime > this.windowMs) {
+        localStorage.removeItem(this.getKey(studentId));
+        return { attempts: 0, firstTime: null, blocked: false };
+      }
+      
+      // Check if blocked
+      const blocked = parsed.attempts >= this.maxAttempts;
+      return {
+        attempts: parsed.attempts,
+        firstTime: parsed.firstTime,
+        blocked: blocked,
+        unblockIn: blocked ? Math.ceil((this.windowMs - (now - parsed.firstTime)) / 1000) : 0
+      };
+    } catch {
+      localStorage.removeItem(this.getKey(studentId));
+      return { attempts: 0, firstTime: null, blocked: false };
+    }
+  },
+  
+  increment(studentId) {
+    const now = Date.now();
+    const key = this.getKey(studentId);
+    const data = localStorage.getItem(key);
+    
+    if (!data) {
+      localStorage.setItem(key, JSON.stringify({ attempts: 1, firstTime: now }));
+      return { attempts: 1, blocked: false };
+    }
+    
+    try {
+      const parsed = JSON.parse(data);
+      
+      // Reset if window expired
+      if (now - parsed.firstTime > this.windowMs) {
+        localStorage.setItem(key, JSON.stringify({ attempts: 1, firstTime: now }));
+        return { attempts: 1, blocked: false };
+      }
+      
+      parsed.attempts++;
+      const blocked = parsed.attempts >= this.maxAttempts;
+      localStorage.setItem(key, JSON.stringify(parsed));
+      return { attempts: parsed.attempts, blocked: blocked };
+    } catch {
+      localStorage.removeItem(key);
+      localStorage.setItem(key, JSON.stringify({ attempts: 1, firstTime: now }));
+      return { attempts: 1, blocked: false };
+    }
+  },
+  
+  reset(studentId) {
+    localStorage.removeItem(this.getKey(studentId));
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════
+//  RATE LIMIT UI MONITOR
+// ═══════════════════════════════════════════════════════════════════
+const rateLimitUI = {
+  attempts: 0,
+  maxAttempts: 3,
+  blocked: false,
+  unblockTime: null,
+  monitorInterval: null,
+  
+  init() {
+    const html = `<div id="rate-limit-monitor" style="display:none; position:fixed; top:20px; right:20px; background:linear-gradient(135deg, #ff6b6b 0%, #ff4757 100%); color:#fff; padding:15px 20px; border-radius:8px; font-size:13px; font-weight:600; z-index:10000; box-shadow:0 4px 12px rgba(0,0,0,0.3); max-width:300px; font-family:'IBM Plex Mono', monospace; border:2px solid rgba(255,255,255,0.2);"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><span style="font-size:14px;">🔒 Login Attempts</span><button onclick="rateLimitUI.close()" style="background:none; border:none; color:#fff; cursor:pointer; font-size:18px; padding:0; width:24px; height:24px;">✕</button></div><div id="rate-limit-content"><div style="margin-bottom:8px;"><span>Attempts: <span id="rate-limit-attempts">0</span>/<span id="rate-limit-max">3</span></span></div><div id="rate-limit-timer" style="margin-top:8px; font-weight:700; color:#fff; font-size:14px;"></div></div></div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+  },
+  
+  show() {
+    const m = document.getElementById('rate-limit-monitor');
+    if (m) m.style.display = 'block';
+  },
+  
+  close() {
+    const m = document.getElementById('rate-limit-monitor');
+    if (m) m.style.display = 'none';
+  },
+  
+  update(attempts, maxAttempts, blocked, unblockIn) {
+    this.attempts = attempts;
+    this.maxAttempts = maxAttempts;
+    this.blocked = blocked;
+    
+    document.getElementById('rate-limit-attempts').textContent = attempts;
+    document.getElementById('rate-limit-max').textContent = maxAttempts;
+    
+    if (blocked && unblockIn > 0) {
+      this.unblockTime = Date.now() + (unblockIn * 1000);
+      this.startCountdown();
+    }
+  },
+  
+  startCountdown() {
+    if (this.monitorInterval) clearInterval(this.monitorInterval);
+    
+    const tick = () => {
+      const now = Date.now();
+      const remaining = Math.max(0, Math.ceil((this.unblockTime - now) / 1000));
+      const timerEl = document.getElementById('rate-limit-timer');
+      
+      if (remaining <= 0) {
+        clearInterval(this.monitorInterval);
+        timerEl.textContent = '✓ Account unlocked!';
+        timerEl.style.color = '#4ade80';
+        setTimeout(() => this.close(), 2000);
+      } else {
+        const m = Math.floor(remaining / 60);
+        const s = (remaining % 60).toString().padStart(2, '0');
+        timerEl.textContent = `🔒 Locked for ${m}m ${s}s`;
+      }
+    };
+    tick();
+    this.monitorInterval = setInterval(tick, 500);
+  }
+};
+
+// Enhanced doLogin that respects client-side rate limiting
+function doLogin() {
+  const id = document.getElementById('login-id').value.trim();
+  const pw = document.getElementById('login-pw').value;
+  if (!id || !pw) return showLoginErr('Fill in all fields.');
+
+  // Check rate limit
+  const status = rateLimitTracker.getAttempts(id);
+  if (status.blocked) {
+    rateLimitUI.update(status.attempts, 3, true, status.unblockIn);
+    rateLimitUI.show();
+    showLoginErr(`🔒 Too many failed attempts. Try again in ${status.unblockIn} seconds.`);
+    return;
+  }
+  
+  // Show monitor if approaching limit
+  if (status.attempts >= 2) {
+    rateLimitUI.update(status.attempts, 3, false, 0);
+    rateLimitUI.show();
+  }
+
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Authenticating...';
+
+  mockApi.login(id, pw)
+    .then(({ token }) => {
+      localStorage.setItem('ds_token', token);
+      currentUser = decodeToken(token);
+      rateLimitTracker.reset(id);
+      rateLimitUI.close();
+      showApp();
+    })
+    .catch(e => {
+      // Increment attempts on failure
+      const result = rateLimitTracker.increment(id);
+      const remaining = 3 - result.attempts;
+      
+      if (result.blocked) {
+        const status = rateLimitTracker.getAttempts(id);
+        rateLimitUI.update(result.attempts, 3, true, status.unblockIn);
+        rateLimitUI.show();
+        showLoginErr(`🔒 Account locked. Try again in ${status.unblockIn} seconds.`);
+      } else {
+        const msg = remaining > 0 ? ` (${remaining} attempt${remaining===1?'':'s'} remaining)` : '';
+        showLoginErr(e.message + msg);
+        rateLimitUI.update(result.attempts, 3, false, 0);
+        if (remaining <= 1) rateLimitUI.show();
+      }
+    })
+    .finally(() => { btn.disabled = false; btn.innerHTML = 'Login →'; });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  INITIALIZE RATE LIMIT UI & AUTO-LOGIN
 // ═══════════════════════════════════════════════════════════════════
 (function init() {
+  // Initialize rate limit monitor UI
+  rateLimitUI.init();
+  
+  // Check for existing token (auto-login)
   const token = localStorage.getItem('ds_token');
   if (token) {
     const user = decodeToken(token);
