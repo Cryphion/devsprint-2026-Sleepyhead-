@@ -11,20 +11,20 @@ app.use(express.json());
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
 // ── CONFIG ───────────────────────────────
-const PORT                = process.env.PORT                || 3000;
-const JWT_SECRET          = process.env.JWT_SECRET          || "super_secret_jwt_key_change_in_prod";
-const STOCK_SERVICE_URL   = process.env.STOCK_SERVICE_URL   || "http://stock-service:3002";
-const KITCHEN_SERVICE_URL = process.env.KITCHEN_SERVICE_URL || "http://kitchen-queue:3003";
-const IDENTITY_SERVICE_URL= process.env.IDENTITY_PROVIDER_URL || "http://identity-provider:3001";
-const NOTIFICATION_HUB_URL= process.env.NOTIFICATION_HUB_URL  || "http://notification-hub:3004";
-const REDIS_URL           = process.env.REDIS_URL           || "redis://redis:6379";
-const CACHE_TTL_SECONDS   = parseInt(process.env.CACHE_TTL_SECONDS || "30");
+const PORT                 = process.env.PORT                  || 3000;
+const JWT_SECRET           = process.env.JWT_SECRET            || "super_secret_jwt_key_change_in_prod";
+const STOCK_SERVICE_URL    = process.env.STOCK_SERVICE_URL     || "http://stock-service:3002";
+const KITCHEN_SERVICE_URL  = process.env.KITCHEN_SERVICE_URL   || "http://kitchen-queue:3003";
+const IDENTITY_SERVICE_URL = process.env.IDENTITY_PROVIDER_URL || "http://identity-provider:3001";
+const NOTIFICATION_HUB_URL = process.env.NOTIFICATION_HUB_URL  || "http://notification-hub:3004";
+const REDIS_URL            = process.env.REDIS_URL             || "redis://redis:6379";
+const CACHE_TTL_SECONDS    = parseInt(process.env.CACHE_TTL_SECONDS || "30");
 
 // ── REDIS ────────────────────────────────
 const redis = new Redis(REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 3 });
@@ -32,10 +32,14 @@ redis.on("error", (err) => console.error("[Redis] Connection error:", err.messag
 
 // ── METRICS ──────────────────────────────
 const metrics = {
-  gateway_requests_total: 0, gateway_requests_success: 0,
-  gateway_requests_failed: 0, gateway_auth_failures: 0,
-  gateway_stock_rejections: 0, gateway_latency_ms_total: 0,
-  gateway_latency_count: 0,   gateway_orders_placed: 0,
+  gateway_requests_total:    0,
+  gateway_requests_success:  0,
+  gateway_requests_failed:   0,
+  gateway_auth_failures:     0,
+  gateway_stock_rejections:  0,
+  gateway_latency_ms_total:  0,
+  gateway_latency_count:     0,
+  gateway_orders_placed:     0,
 };
 
 // ── REQUEST COUNTER MIDDLEWARE ────────────
@@ -70,8 +74,10 @@ function requireAuth(req, res, next) {
 
 // ── HEALTH (self + dependencies) ─────────
 app.get("/health", async (req, res) => {
-  const checks = { redis: "ok", stock_service: "ok", kitchen_service: "ok",
-                   identity_service: "ok", notification_hub: "ok" };
+  const checks = {
+    redis: "ok", stock_service: "ok", kitchen_service: "ok",
+    identity_service: "ok", notification_hub: "ok",
+  };
   let allHealthy = true;
   const probe = async (url, key) => {
     try { await axios.get(url, { timeout: 3000 }); }
@@ -86,14 +92,13 @@ app.get("/health", async (req, res) => {
 });
 
 // ── AGGREGATE HEALTH — all 5 services ────
-// GET /health/all → [{name, status, latency}]  (consumed by frontend health grid)
 app.get("/health/all", async (req, res) => {
   const services = [
-    { name: "Identity Provider", url: `${IDENTITY_SERVICE_URL}/health`  },
-    { name: "Order Gateway",     url: null                               },
-    { name: "Stock Service",     url: `${STOCK_SERVICE_URL}/health`      },
-    { name: "Kitchen Queue",     url: `${KITCHEN_SERVICE_URL}/health`    },
-    { name: "Notification Hub",  url: `${NOTIFICATION_HUB_URL}/health`   },
+    { name: "Identity Provider", url: `${IDENTITY_SERVICE_URL}/health` },
+    { name: "Order Gateway",     url: null                              },
+    { name: "Stock Service",     url: `${STOCK_SERVICE_URL}/health`     },
+    { name: "Kitchen Queue",     url: `${KITCHEN_SERVICE_URL}/health`   },
+    { name: "Notification Hub",  url: `${NOTIFICATION_HUB_URL}/health`  },
   ];
   const results = await Promise.all(services.map(async (svc) => {
     if (!svc.url) return { name: svc.name, status: "up", latency: 1 };
@@ -128,92 +133,156 @@ app.get("/metrics/json", (req, res) => {
   const avg = metrics.gateway_latency_count > 0
     ? Math.round(metrics.gateway_latency_ms_total / metrics.gateway_latency_count) : 0;
   res.json({
-    totalOrders:      metrics.gateway_orders_placed,
-    failures:         metrics.gateway_requests_failed,
-    avgLatency:       avg + "ms",
-    authFailures:     metrics.gateway_auth_failures,
-    stockRejections:  metrics.gateway_stock_rejections,
-    requestsTotal:    metrics.gateway_requests_total,
+    totalOrders:     metrics.gateway_orders_placed,
+    failures:        metrics.gateway_requests_failed,
+    avgLatency:      avg + "ms",
+    authFailures:    metrics.gateway_auth_failures,
+    stockRejections: metrics.gateway_stock_rejections,
+    requestsTotal:   metrics.gateway_requests_total,
   });
 });
 
-// ── STOCK PROXY — GET /stock ──────────────
-// Proxies to stock-service GET /items with Redis cache layer
+// ─────────────────────────────────────────────────────────────────
+// ── STOCK PROXY — GET /stock ──────────────────────────────────────
+// stock-service: GET /api/stocks → [{ id, name, quantity, price }]
+// script.js expects:               [{ id, name, stock,    price }]
+// ─────────────────────────────────────────────────────────────────
 app.get("/stock", requireAuth, async (req, res) => {
   try {
     const cached = await redis.get("stock:all");
     if (cached) return res.json(JSON.parse(cached));
   } catch { /* cache miss */ }
   try {
-    const { data } = await axios.get(`${STOCK_SERVICE_URL}/items`, { timeout: 5000 });
-    try { await redis.set("stock:all", JSON.stringify(data), "EX", CACHE_TTL_SECONDS); } catch {}
-    return res.json(data);
+    const { data } = await axios.get(`${STOCK_SERVICE_URL}/api/stocks`, { timeout: 5000 });
+    const mapped = data.map((item) => ({
+      id:    String(item.id),
+      name:  item.name,
+      stock: item.quantity,   // rename quantity → stock for script.js
+      price: item.price ?? 0, // price seeded in init-db.sql
+    }));
+    try { await redis.set("stock:all", JSON.stringify(mapped), "EX", CACHE_TTL_SECONDS); } catch {}
+    return res.json(mapped);
   } catch (err) {
-    console.error("[StockService] GET /items error:", err.message);
+    console.error("[StockService] GET /api/stocks error:", err.message);
     return res.status(503).json({ message: "Stock service unavailable" });
   }
 });
 
-// ── UPDATE STOCK — POST /stock/update ─────
-// Admin-only stock update, proxied to stock-service
+// ─────────────────────────────────────────────────────────────────
+// ── UPDATE STOCK — POST /stock/update ────────────────────────────
+// script.js sends: { itemId: "i01", quantity: 50 }
+// stock-service:   PUT /api/stocks/:id  body: { quantity }
+// ─────────────────────────────────────────────────────────────────
 app.post("/stock/update", requireAuth, async (req, res) => {
   const { itemId, quantity } = req.body;
-  if (!itemId || quantity === undefined) return res.status(400).json({ message: "itemId and quantity required" });
+  if (!itemId || quantity === undefined) {
+    return res.status(400).json({ message: "itemId and quantity required" });
+  }
   try {
-    const { data } = await axios.post(`${STOCK_SERVICE_URL}/update`, { itemId, quantity }, { timeout: 5000 });
+    const { data } = await axios.put(
+      `${STOCK_SERVICE_URL}/api/stocks/${itemId}`,
+      { quantity },
+      { timeout: 5000 }
+    );
     try { await redis.del("stock:all"); await redis.del(`stock:${itemId}`); } catch {}
     return res.json(data);
   } catch (err) {
-    console.error("[StockService] update error:", err.message);
+    console.error("[StockService] PUT /api/stocks error:", err.message);
     return res.status(503).json({ message: "Stock service unavailable" });
   }
 });
 
-// ── POST /orders — main order flow ────────
-// Accepts multi-item: { items: [{itemId, quantity}] }
-// or legacy single:   { itemId, quantity }
+// ─────────────────────────────────────────────────────────────────
+// ── POST /orders — main order flow ───────────────────────────────
+// script.js sends: { items: [{ itemId, quantity }, ...] }
+//
+// Flow per item:
+//   1. Fast Redis cache check — reject instantly if stock is 0
+//   2. GET /api/stocks/:id   — fetch current quantity + version
+//   3. PATCH /api/stocks/:id/deduct { quantity, version }  (optimistic lock)
+//   4. Forward to kitchen-queue POST /process
+// ─────────────────────────────────────────────────────────────────
 app.post("/orders", requireAuth, async (req, res) => {
   let orderItems = Array.isArray(req.body.items)
     ? req.body.items
-    : req.body.itemId ? [{ itemId: req.body.itemId, quantity: req.body.quantity }] : [];
+    : req.body.itemId
+      ? [{ itemId: req.body.itemId, quantity: req.body.quantity }]
+      : [];
 
-  if (!orderItems.length) return res.status(400).json({ message: "No items provided" });
+  if (!orderItems.length) {
+    return res.status(400).json({ message: "No items provided" });
+  }
+
+  // Validate shape
   for (const { itemId, quantity } of orderItems) {
-    if (!itemId || !quantity || quantity <= 0)
+    if (!itemId || !quantity || quantity <= 0) {
       return res.status(400).json({ message: `Invalid item: ${itemId}` });
+    }
+  }
+
+  // ── Step 1: Fast cache check (protect DB from unnecessary load) ──
+  for (const { itemId, quantity } of orderItems) {
     try {
       const cached = await redis.get(`stock:${itemId}`);
       if (cached !== null && parseInt(cached) < quantity) {
         metrics.gateway_stock_rejections++;
-        return res.status(400).json({ message: `Insufficient stock for ${itemId} (cache)` });
+        return res.status(400).json({ message: `Insufficient stock for item ${itemId} (cache check)` });
       }
-    } catch {}
+    } catch { /* cache unavailable — fall through to DB */ }
   }
 
+  // ── Steps 2 & 3: Fetch version then deduct for each item ──
   for (const { itemId, quantity } of orderItems) {
+    // Fetch current stock + version (needed for optimistic locking)
+    let currentItem;
     try {
-      const { data: stockData } = await axios.post(
-        `${STOCK_SERVICE_URL}/decrement`, { itemId, quantity }, { timeout: 5000 }
+      const { data } = await axios.get(
+        `${STOCK_SERVICE_URL}/api/stocks/${itemId}`,
+        { timeout: 5000 }
       );
-      if (stockData.remaining !== undefined) {
-        try {
-          await redis.set(`stock:${itemId}`, stockData.remaining, "EX", CACHE_TTL_SECONDS);
-          await redis.del("stock:all");
-        } catch {}
-      }
+      currentItem = data;
     } catch (err) {
-      if (err.response?.status === 400) {
+      console.error(`[StockService] GET /api/stocks/${itemId} error:`, err.message);
+      return res.status(503).json({ message: "Stock service unavailable" });
+    }
+
+    if (currentItem.quantity < quantity) {
+      metrics.gateway_stock_rejections++;
+      return res.status(400).json({ message: `Insufficient stock for item ${itemId}` });
+    }
+
+    // Deduct with optimistic locking
+    try {
+      const { data: deductResult } = await axios.patch(
+        `${STOCK_SERVICE_URL}/api/stocks/${itemId}/deduct`,
+        { quantity, version: currentItem.version },
+        { timeout: 5000 }
+      );
+      // Update cache with new quantity
+      try {
+        await redis.set(`stock:${itemId}`, String(deductResult.quantity), "EX", CACHE_TTL_SECONDS);
+        await redis.del("stock:all");
+      } catch {}
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 409) {
         metrics.gateway_stock_rejections++;
-        return res.status(400).json({ message: err.response.data?.error || `Insufficient stock for ${itemId}` });
+        return res.status(409).json({ message: `Stock conflict for item ${itemId}, please retry` });
       }
-      console.error("[StockService] decrement error:", err.message);
+      if (status === 422) {
+        metrics.gateway_stock_rejections++;
+        return res.status(400).json({ message: `Insufficient stock for item ${itemId}` });
+      }
+      console.error(`[StockService] PATCH deduct error for ${itemId}:`, err.message);
       return res.status(503).json({ message: "Stock service unavailable" });
     }
   }
 
+  // ── Step 4: Forward to kitchen queue (non-fatal if unavailable) ──
   const orderId = "ORD-" + Math.random().toString(36).substr(2, 6).toUpperCase();
   try {
-    await axios.post(`${KITCHEN_SERVICE_URL}/process`,
+    await axios.post(
+      `${KITCHEN_SERVICE_URL}/process`,
       { orderId, items: orderItems, userId: req.user.id || req.user.student_id },
       { timeout: 5000 }
     );
@@ -225,5 +294,5 @@ app.post("/orders", requireAuth, async (req, res) => {
   return res.status(200).json({ message: "Order accepted", orderId });
 });
 
-app.listen(PORT, () => console.log(`Order Gateway running on port ${PORT}`));
+app.listen(PORT, () => console.log(`✅ Order Gateway running on port ${PORT}`));
 module.exports = app;

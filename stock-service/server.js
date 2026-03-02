@@ -15,7 +15,7 @@ const pool = new Pool({
   port: parseInt(process.env.DB_PORT) || 5432,
   user: process.env.DB_USER || "cafeteria",
   password: process.env.DB_PASSWORD || "secret",
-  database: process.env.DB_NAME || "cafeteria_db",
+  database: process.env.DB_NAME || "stock_db",
 });
 
 // ─── Redis ────────────────────────────────────────────────────
@@ -32,11 +32,15 @@ async function initDB(retries = 15, delayMs = 3000) {
     try {
       await pool.query(`
         CREATE TABLE IF NOT EXISTS stocks (
-          id        SERIAL PRIMARY KEY,
+          id        VARCHAR(10) PRIMARY KEY,
           name      VARCHAR(255) UNIQUE NOT NULL,
           quantity  INTEGER NOT NULL CHECK (quantity >= 0),
+          price     INTEGER NOT NULL DEFAULT 0,
           version   INTEGER NOT NULL DEFAULT 0
         )
+      `);
+      await pool.query(`
+        ALTER TABLE stocks ADD COLUMN IF NOT EXISTS price INTEGER NOT NULL DEFAULT 0
       `);
       console.log("✅ DB table ready");
       return;
@@ -45,7 +49,6 @@ async function initDB(retries = 15, delayMs = 3000) {
       if (i < retries) await new Promise((r) => setTimeout(r, delayMs));
     }
   }
-  // Don't exit — /health returns 503 until DB recovers
   console.error("❌ Could not init DB after all retries. Starting in degraded mode.");
 }
 
@@ -83,7 +86,6 @@ app.get("/metrics", (req, res) => {
   });
 });
 
-// Middleware to track metrics
 app.use((req, res, next) => {
   const start = Date.now();
   metrics.totalRequests++;
@@ -100,8 +102,12 @@ app.get("/api/stocks", async (req, res) => {
     const cached = await redisClient.get("stocks:all").catch(() => null);
     if (cached) return res.json(JSON.parse(cached));
 
-    const result = await pool.query("SELECT id, name, quantity FROM stocks ORDER BY id");
-    await redisClient.setEx("stocks:all", CACHE_TTL, JSON.stringify(result.rows)).catch(() => {});
+    const result = await pool.query(
+      "SELECT id, name, quantity, price FROM stocks ORDER BY id"
+    );
+    await redisClient
+      .setEx("stocks:all", CACHE_TTL, JSON.stringify(result.rows))
+      .catch(() => {});
     res.json(result.rows);
   } catch (err) {
     console.error(err);
@@ -111,17 +117,22 @@ app.get("/api/stocks", async (req, res) => {
 
 // ─── GET single stock ─────────────────────────────────────────
 app.get("/api/stocks/:id", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
+  const id = req.params.id;
+  if (!id) return res.status(400).json({ error: "Invalid id" });
 
   try {
     const cached = await redisClient.get(cacheKey(id)).catch(() => null);
     if (cached) return res.json(JSON.parse(cached));
 
-    const result = await pool.query("SELECT id, name, quantity FROM stocks WHERE id = $1", [id]);
+    const result = await pool.query(
+      "SELECT id, name, quantity, price, version FROM stocks WHERE id = $1",
+      [id]
+    );
     if (!result.rows.length) return res.status(404).json({ error: "Not found" });
 
-    await redisClient.setEx(cacheKey(id), CACHE_TTL, JSON.stringify(result.rows[0])).catch(() => {});
+    await redisClient
+      .setEx(cacheKey(id), CACHE_TTL, JSON.stringify(result.rows[0]))
+      .catch(() => {});
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch stock" });
@@ -130,7 +141,7 @@ app.get("/api/stocks/:id", async (req, res) => {
 
 // ─── POST add stock ───────────────────────────────────────────
 app.post("/api/stocks", async (req, res) => {
-  const { name, quantity } = req.body;
+  const { name, quantity, price } = req.body;
 
   if (!name || typeof name !== "string" || name.trim() === "") {
     return res.status(400).json({ error: "name is required" });
@@ -142,8 +153,8 @@ app.post("/api/stocks", async (req, res) => {
 
   try {
     const result = await pool.query(
-      "INSERT INTO stocks (name, quantity) VALUES ($1, $2) RETURNING id, name, quantity",
-      [name.trim(), qty]
+      "INSERT INTO stocks (name, quantity, price) VALUES ($1, $2, $3) RETURNING id, name, quantity, price",
+      [name.trim(), qty, price ?? 0]
     );
     await redisClient.del("stocks:all").catch(() => {});
     res.status(201).json(result.rows[0]);
@@ -154,32 +165,35 @@ app.post("/api/stocks", async (req, res) => {
 });
 
 // ─── PATCH deduct stock (optimistic locking) ──────────────────
-// Body: { quantity: <amount to deduct>, version: <current version> }
 app.patch("/api/stocks/:id/deduct", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
+  const id = req.params.id;
+  if (!id) return res.status(400).json({ error: "Invalid id" });
 
-  const amount = parseInt(req.body.quantity);
+  const amount  = parseInt(req.body.quantity);
   const version = parseInt(req.body.version);
 
-  if (isNaN(amount) || amount <= 0) return res.status(400).json({ error: "quantity must be positive" });
-  if (isNaN(version)) return res.status(400).json({ error: "version is required for optimistic locking" });
+  if (isNaN(amount) || amount <= 0)
+    return res.status(400).json({ error: "quantity must be positive" });
+  if (isNaN(version))
+    return res.status(400).json({ error: "version is required for optimistic locking" });
 
   try {
-    // Optimistic locking: only update if version matches
     const result = await pool.query(
       `UPDATE stocks
        SET quantity = quantity - $1, version = version + 1
        WHERE id = $2 AND version = $3 AND quantity >= $1
-       RETURNING id, name, quantity, version`,
+       RETURNING id, name, quantity, price, version`,
       [amount, id, version]
     );
 
     if (!result.rows.length) {
-      // Check why it failed
-      const check = await pool.query("SELECT quantity, version FROM stocks WHERE id = $1", [id]);
+      const check = await pool.query(
+        "SELECT quantity, version FROM stocks WHERE id = $1",
+        [id]
+      );
       if (!check.rows.length) return res.status(404).json({ error: "Item not found" });
-      if (check.rows[0].version !== version) return res.status(409).json({ error: "Version conflict, retry" });
+      if (check.rows[0].version !== version)
+        return res.status(409).json({ error: "Version conflict, retry" });
       return res.status(422).json({ error: "Insufficient stock" });
     }
 
@@ -193,15 +207,16 @@ app.patch("/api/stocks/:id/deduct", async (req, res) => {
 
 // ─── PUT update stock ─────────────────────────────────────────
 app.put("/api/stocks/:id", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
+  const id = req.params.id;
+  if (!id) return res.status(400).json({ error: "Invalid id" });
 
   const qty = parseInt(req.body.quantity);
-  if (isNaN(qty) || qty < 0) return res.status(400).json({ error: "quantity must be a non-negative integer" });
+  if (isNaN(qty) || qty < 0)
+    return res.status(400).json({ error: "quantity must be a non-negative integer" });
 
   try {
     const result = await pool.query(
-      "UPDATE stocks SET quantity = $1, version = version + 1 WHERE id = $2 RETURNING id, name, quantity",
+      "UPDATE stocks SET quantity = $1, version = version + 1 WHERE id = $2 RETURNING id, name, quantity, price",
       [qty, id]
     );
     if (!result.rows.length) return res.status(404).json({ error: "Not found" });
@@ -214,11 +229,14 @@ app.put("/api/stocks/:id", async (req, res) => {
 
 // ─── DELETE stock ─────────────────────────────────────────────
 app.delete("/api/stocks/:id", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
+  const id = req.params.id;
+  if (!id) return res.status(400).json({ error: "Invalid id" });
 
   try {
-    const result = await pool.query("DELETE FROM stocks WHERE id = $1 RETURNING id", [id]);
+    const result = await pool.query(
+      "DELETE FROM stocks WHERE id = $1 RETURNING id",
+      [id]
+    );
     if (!result.rows.length) return res.status(404).json({ error: "Not found" });
     await invalidateCache(id);
     res.json({ message: "Item deleted" });
@@ -228,8 +246,6 @@ app.delete("/api/stocks/:id", async (req, res) => {
 });
 
 // ─── Start ────────────────────────────────────────────────────
-// Start HTTP server immediately so Docker healthcheck can reach /health
-// even while initDB is still retrying in the background.
 app.listen(PORT, () => {
   console.log(`✅ stock-service running on port ${PORT}`);
 });
