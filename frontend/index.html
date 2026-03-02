@@ -1643,101 +1643,162 @@ function decodeToken(token) {
 //  MOCK API  (login uses real identity-provider; others remain mock)
 // ═══════════════════════════════════════════════════════════════════
 const mockApi = {
-  // ── REAL: hits identity-provider:3001/login ──────────────────────
+  // ── REAL: identity-provider:3001/login ───────────────────────────
   login: async (id, pw) => {
     const res = await fetch(`${API.identity}/login`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ student_id: id, password: pw }),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ student_id: id, password: pw }),
     });
-
-    // Surface rate-limit header info for the UI monitor
-    const remaining = res.headers.get('X-RateLimit-Remaining');
-    const resetAt   = res.headers.get('X-RateLimit-Reset');
+    const remaining = res.headers.get("X-RateLimit-Remaining");
+    const resetAt   = res.headers.get("X-RateLimit-Reset");
     if (remaining !== null) {
       window._rateLimitRemaining = parseInt(remaining);
       window._rateLimitReset     = parseInt(resetAt);
     }
-
     const data = await res.json();
-
     if (res.status === 429) {
-      const err = new Error(data.message || 'Too many login attempts.');
-      err.status    = 429;
-      err.retryAfter = data.retryAfter || 60;
+      const err = new Error(data.message || "Too many login attempts.");
+      err.status = 429; err.retryAfter = data.retryAfter || 60;
       throw err;
     }
-    if (!res.ok) {
-      throw new Error(data.message || 'Invalid credentials');
-    }
-
-    // Server returns { token, name, role, student_id }
+    if (!res.ok) throw new Error(data.message || "Invalid credentials");
     return { token: data.token, name: data.name, role: data.role, student_id: data.student_id };
   },
-  getStock: () => {
-    if (window._stockItems) return Promise.resolve(window._stockItems);
-    return delay(400).then(() => {
-      const _defaultStock = [
-    // ── Snacks & Fritters ─────────────────────────────────────────
-    { id: 'i01', name: 'Beguni (Eggplant Fritter)',     stock: 150, price: 10  },
-    { id: 'i02', name: 'Piyaju (Lentil Onion Fritter)', stock: 150, price: 10  },
-    { id: 'i03', name: 'Aloo Chop (Potato Fritter)',    stock: 120, price: 20  },
-    { id: 'i04', name: 'Chicken Tikka',                 stock: 80,  price: 100 },
-    { id: 'i05', name: 'Beef Tikka',                    stock: 60,  price: 120 },
-    { id: 'i06', name: 'Samosa',                        stock: 100, price: 10  },
-    { id: 'i07', name: 'Singara',                       stock: 80,  price: 10  },
-    { id: 'i08', name: 'Vegetable Roll',                stock: 70,  price: 40  },
-    { id: 'i09', name: 'Chicken Roll',                  stock: 75,  price: 60  },
-    { id: 'i10', name: 'Shami Kebab (Beef/Chicken)',    stock: 60,  price: 40  },
-    { id: 'i11', name: 'Chicken Nuggets',                stock: 90,  price: 30  },
-    { id: 'i12', name: 'Beef Seekh Kebab',              stock: 50,  price: 80  },
-    { id: 'i13', name: 'Jali Kabab',                    stock: 55,  price: 20  },
-    { id: 'i14', name: 'Chicken Spring Roll',           stock: 65,  price: 40  },
-    { id: 'i15', name: 'Chicken Fry',                   stock: 80,  price: 60  },
-    { id: 'i16', name: 'Chicken Hot Dog',               stock: 120, price: 100  },
-    // ── Sweets & Desserts ─────────────────────────────────────────
-    { id: 'i17', name: 'Jilapi',                        stock: 100, price: 20  },
-    { id: 'i18', name: 'Fruit Juice',                   stock: 60,  price: 50  },
-    { id: 'i19', name: 'Lemonade',                      stock: 70,  price: 30  },
-    { id: 'i20', name: 'Date / Khajur (per piece)',     stock: 200, price: 5  },
+
+  // ── REAL: order-gateway:3000/stock ───────────────────────────────
+  getStock: async () => {
+    const token = localStorage.getItem("ds_token");
+    if (!token) throw new Error("Not authenticated");
+    // Use in-memory override if admin changed stock
+    if (window._stockItems) return window._stockItems;
+    try {
+      const res = await fetch(`${API.order}/stock`, {
+        headers: { Authorization: "Bearer " + token },
+      });
+      if (!res.ok) throw new Error("Stock fetch failed");
+      const data = await res.json();
+      window._stockItems = data;   // cache locally
+      return data;
+    } catch (e) {
+      // Fallback to hardcoded list if gateway unreachable (dev mode)
+      console.warn("[getStock] Gateway unreachable, using fallback:", e.message);
+      const fallback = [
+        { id: "i01", name: "Beguni (Eggplant Fritter)",     stock: 150, price: 10  },
+        { id: "i02", name: "Piyaju (Lentil Onion Fritter)", stock: 150, price: 10  },
+        { id: "i03", name: "Aloo Chop (Potato Fritter)",    stock: 120, price: 20  },
+        { id: "i04", name: "Chicken Tikka",                 stock: 80,  price: 100 },
+        { id: "i05", name: "Beef Tikka",                    stock: 60,  price: 120 },
+        { id: "i06", name: "Samosa",                        stock: 100, price: 10  },
+        { id: "i07", name: "Singara",                       stock: 80,  price: 10  },
+        { id: "i08", name: "Vegetable Roll",                stock: 70,  price: 40  },
+        { id: "i09", name: "Chicken Roll",                  stock: 75,  price: 60  },
+        { id: "i10", name: "Shami Kebab (Beef/Chicken)",    stock: 60,  price: 40  },
+        { id: "i11", name: "Chicken Nuggets",               stock: 90,  price: 30  },
+        { id: "i12", name: "Beef Seekh Kebab",              stock: 50,  price: 80  },
+        { id: "i13", name: "Jali Kabab",                    stock: 55,  price: 20  },
+        { id: "i14", name: "Chicken Spring Roll",           stock: 65,  price: 40  },
+        { id: "i15", name: "Chicken Fry",                   stock: 80,  price: 60  },
+        { id: "i16", name: "Chicken Hot Dog",               stock: 120, price: 100 },
+        { id: "i17", name: "Jilapi",                        stock: 100, price: 20  },
+        { id: "i18", name: "Fruit Juice",                   stock: 60,  price: 50  },
+        { id: "i19", name: "Lemonade",                      stock: 70,  price: 30  },
+        { id: "i20", name: "Date / Khajur (per piece)",     stock: 200, price: 5   },
       ];
-      window._stockItems = _defaultStock;
-      return _defaultStock;
-    });
+      window._stockItems = fallback;
+      return fallback;
+    }
   },
-    getPlatters: () => delay(400).then(() => [
-    { id: 'p01', name: 'Mini Iftar Platter',
-      contains: 'Beguni x2, Piyaju x2, Aloo Chop x1, Jilapi, Fried Rice, Fruit Juice',
-      stock: 50, price: 130  },
-    { id: 'p02', name: 'Standard Iftar Platter',
-      contains: 'Chicken Samosa x2, Shami Kebab x2, Vegetable Roll, Jilapi, Fried Rice, Chicken Fry, Lemonade',
+
+  getPlatters: () => delay(400).then(() => [
+    { id: "p01", name: "Mini Iftar Platter",
+      contains: "Beguni x2, Piyaju x2, Aloo Chop x1, Jilapi, Fried Rice, Fruit Juice",
+      stock: 50, price: 130 },
+    { id: "p02", name: "Standard Iftar Platter",
+      contains: "Chicken Samosa x2, Shami Kebab x2, Vegetable Roll, Jilapi, Fried Rice, Chicken Fry, Lemonade",
       stock: 40, price: 180 },
-    { id: 'p03', name: 'Chicken Platter',
-      contains: 'Chicken Chop, Chicken Tikka x2, Chicken Nugget x3, Fried Rice, Chicken Fry, Fruit Juice',
+    { id: "p03", name: "Chicken Platter",
+      contains: "Chicken Chop, Chicken Tikka x2, Chicken Nugget x3, Fried Rice, Chicken Fry, Fruit Juice",
       stock: 30, price: 320 },
-    { id: 'p04', name: 'Beef Special Platter',
-      contains: 'Beef Chop, Beef Samosa x2, Beef Seekh Kebab x2, Noodles (small), Fried Rice, Beef Chap',
+    { id: "p04", name: "Beef Special Platter",
+      contains: "Beef Chop, Beef Samosa x2, Beef Seekh Kebab x2, Noodles (small), Fried Rice, Beef Chap",
       stock: 25, price: 380 },
-    { id: 'p05', name: 'Premium Combo Platter',
-      contains: 'Chicken Tikka x2, Seekh Kebab x2, Spring Roll x2, Fried Rice, Noodles, Jilapi, , Beef Chap, 2x Juice',
+    { id: "p05", name: "Premium Combo Platter",
+      contains: "Chicken Tikka x2, Seekh Kebab x2, Spring Roll x2, Fried Rice, Noodles, Jilapi, Beef Chap, 2x Juice",
       stock: 20, price: 520 },
-    { id: 'p06', name: 'Royal Iftar Platter',
-      contains: 'Full spread — Chicken+Beef items, Fried Rice, Noodles, Khajur, Fried Rice x4, Chicken Fry x4, Beef Chap x4, Jilapi, Cream Roll, 4x Drinks',
+    { id: "p06", name: "Royal Iftar Platter",
+      contains: "Full spread — Chicken+Beef items, Fried Rice, Noodles, Khajur, Fried Rice x4, Chicken Fry x4, Beef Chap x4, Jilapi, Cream Roll, 4x Drinks",
       stock: 10, price: 850 },
-  ]),  placeOrder: (items) => delay(800).then(() => ({
-    orderId: 'ORD-' + Math.random().toString(36).substr(2,6).toUpperCase(),
-    status: 'Pending'
-  })),
-  getHealth: () => delay(300).then(() => [
-    { name: 'Identity Provider', status: 'up',   latency: 12   },
-    { name: 'Order Gateway',     status: 'up',   latency: 28   },
-    { name: 'Stock Service',     status: 'up',   latency: 8    },
-    { name: 'Kitchen Queue',     status: 'up',   latency: 45   },
-    { name: 'Notification Hub',  status: 'down', latency: null },
   ]),
-  getMetrics: () => delay(350).then(() => ({ totalOrders: 147, failures: 3, avgLatency: '23ms' })),
-  registerUser: (data) => delay(500).then(() => ({ message: 'User created successfully' })),
-  updateStock: (id, qty) => delay(400).then(() => ({ message: 'Stock updated' })),
+
+  // ── REAL: order-gateway:3000/orders ──────────────────────────────
+  placeOrder: async (cartItems) => {
+    const token = localStorage.getItem("ds_token");
+    if (!token) throw new Error("Not authenticated");
+    const items = cartItems.map((i) => ({ itemId: i.id, quantity: i.qty }));
+    const res = await fetch(`${API.order}/orders`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ items }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || "Order failed");
+    return { orderId: data.orderId, status: "Pending" };
+  },
+
+  // ── REAL: order-gateway:3000/health/all ──────────────────────────
+  getHealth: async () => {
+    const token = localStorage.getItem("ds_token");
+    try {
+      const res = await fetch(`${API.order}/health/all`, {
+        headers: token ? { Authorization: "Bearer " + token } : {},
+      });
+      if (res.ok) return await res.json();
+    } catch {}
+    // Fallback mock if gateway unreachable
+    return [
+      { name: "Identity Provider", status: "up",   latency: 12   },
+      { name: "Order Gateway",     status: "up",   latency: 28   },
+      { name: "Stock Service",     status: "up",   latency: 8    },
+      { name: "Kitchen Queue",     status: "up",   latency: 45   },
+      { name: "Notification Hub",  status: "down", latency: null },
+    ];
+  },
+
+  // ── REAL: order-gateway:3000/metrics/json ────────────────────────
+  getMetrics: async () => {
+    const token = localStorage.getItem("ds_token");
+    try {
+      const res = await fetch(`${API.order}/metrics/json`, {
+        headers: token ? { Authorization: "Bearer " + token } : {},
+      });
+      if (res.ok) return await res.json();
+    } catch {}
+    return { totalOrders: 0, failures: 0, avgLatency: "0ms" };
+  },
+
+  // ── REAL: order-gateway:3000/stock/update ────────────────────────
+  updateStock: async (id, qty) => {
+    const token = localStorage.getItem("ds_token");
+    if (!token) throw new Error("Not authenticated");
+    try {
+      const res = await fetch(`${API.order}/stock/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+        body: JSON.stringify({ itemId: id, quantity: qty }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Update failed");
+      // Bust local cache
+      window._stockItems = null;
+      return data;
+    } catch (e) {
+      console.warn("[updateStock] Gateway unreachable:", e.message);
+      return { message: "Stock updated (local only)" };
+    }
+  },
+
+  registerUser: (data) => delay(500).then(() => ({ message: "User created successfully" })),
 };
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -2203,28 +2264,39 @@ function renderSummary() {
 
 function doPlaceOrder() {
   const allItems = [...menuItems, ...(window._platters || [])];
-  const selected = allItems.filter(i => quantities[i.id] > 0);
-  const errEl = document.getElementById('order-err');
-  const btn   = document.getElementById('place-btn');
+  const selected = allItems.filter((i) => quantities[i.id] > 0);
+  const errEl = document.getElementById("order-err");
+  const btn   = document.getElementById("place-btn");
+
   if (!selected.length) {
-    errEl.textContent = '⚠ Select at least one item.';
-    errEl.style.display = 'block'; return;
+    errEl.textContent = "⚠ Select at least one item.";
+    errEl.style.display = "block";
+    return;
   }
-  errEl.style.display = 'none';
+  errEl.style.display = "none";
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Adding to Cart...';
-  delay(500).then(() => {
-    // Save cart globally
-    window._cartItems = selected.map(i => ({ ...i, qty: quantities[i.id] }));
-    window._orderTotal = window._cartItems.reduce((s, i) => s + i.price * i.qty, 0);
-    // Show success screen
-    currentOrderId = 'ORD-' + Math.random().toString(36).substr(2,6).toUpperCase();
-    document.getElementById('placed-order-id').textContent = currentOrderId;
-    document.getElementById('order-grid').style.display = 'none';
-    document.getElementById('order-success').style.display = 'block';
-    btn.disabled = false;
-    btn.innerHTML = 'View Cart →';
-  });
+  btn.innerHTML = '<span class="spinner"></span> Placing Order...';
+
+  const cartItems = selected.map((i) => ({ ...i, qty: quantities[i.id] }));
+
+  mockApi
+    .placeOrder(cartItems)
+    .then(({ orderId }) => {
+      window._cartItems  = cartItems;
+      window._orderTotal = cartItems.reduce((s, i) => s + i.price * i.qty, 0);
+      currentOrderId = orderId;
+      document.getElementById("placed-order-id").textContent = orderId;
+      document.getElementById("order-grid").style.display    = "none";
+      document.getElementById("order-success").style.display = "block";
+    })
+    .catch((e) => {
+      errEl.textContent  = "⚠ " + e.message;
+      errEl.style.display = "block";
+    })
+    .finally(() => {
+      btn.disabled = false;
+      btn.innerHTML = "Add to Cart →";
+    });
 }
 
 function goToCartFromSuccess() {
