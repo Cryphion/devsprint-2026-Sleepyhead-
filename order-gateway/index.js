@@ -191,7 +191,7 @@ app.get("/stock", requireAuth, async (req, res) => {
       stock: item.quantity,   // rename quantity → stock for Script.js
       price: item.price ?? 0,
     }));
-    try { await redis.set("stock:all", JSON.stringify(mapped), "EX", CACHE_TTL_SECONDS); } catch {}
+    try { await redis.set("stock:all", JSON.stringify(mapped), "EX", CACHE_TTL_SECONDS); } catch { /* cache write failure — non-fatal */ }
     return res.json(mapped);
   } catch (err) {
     console.error("[StockService] GET /api/stocks error:", err.message);
@@ -215,7 +215,7 @@ app.post("/stock/update", requireAuth, async (req, res) => {
       { quantity },
       { timeout: 5000 }
     );
-    try { await redis.del("stock:all"); await redis.del(`stock:${itemId}`); } catch {}
+    try { await redis.del("stock:all"); await redis.del(`stock:${itemId}`); } catch { /* cache bust failure — non-fatal */ }
     return res.json(data);
   } catch (err) {
     console.error("[StockService] PUT /api/stocks error:", err.message);
@@ -294,7 +294,7 @@ app.post("/orders", requireAuth, async (req, res) => {
       try {
         await redis.set(`stock:${itemId}`, String(deductResult.quantity), "EX", CACHE_TTL_SECONDS);
         await redis.del("stock:all");
-      } catch {}
+      } catch { /* cache update failure — non-fatal */ }
     } catch (err) {
       const status = err.response?.status;
       if (status === 409) {
