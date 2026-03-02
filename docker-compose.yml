@@ -254,23 +254,20 @@ services:
 
   # ─────────────────────────────────────────
   # FRONTEND — Student UI + Admin Dashboard
-  # Single React SPA served on port 8080
-  # # ─────────────────────────────────────────
-  # frontend:
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
-  #   container_name: frontend
-  #   restart: unless-stopped
-  #   ports:
-  #     - "8080:80"    # ← open http://localhost:8080 in your browser
-  #   environment:
-  #     VITE_GATEWAY_URL: http://localhost:3000
-  #     VITE_NOTIFICATION_WS_URL: ws://localhost:3004
-  #   depends_on:
-  #     order-gateway:
-  #       condition: service_healthy
-  #     notification-hub:
-  #       condition: service_healthy
-  #   networks:
-  #     - cafeteria-net
+  # Static HTML/CSS/JS served by nginx on port 8080
+  # ─────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"    # ← open http://localhost:8080 in your browser
+    depends_on:
+      order-gateway:
+        condition: service_healthy
+      notification-hub:
+        condition: service_healthy
+    networks:
+      - cafeteria-net

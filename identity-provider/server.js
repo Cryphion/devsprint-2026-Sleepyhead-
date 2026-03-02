@@ -4,6 +4,7 @@ const dotenv = require("dotenv");
 const bcrypt = require("bcryptjs");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
+const { Pool } = require("pg");
 
 dotenv.config();
 
@@ -17,19 +18,74 @@ const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX) || 3;
 const RATE_LIMIT_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60000;
 
 // ─────────────────────────────────────────
+// PostgreSQL connection
+// ─────────────────────────────────────────
+const pool = new Pool({
+  host:     process.env.DB_HOST     || "localhost",
+  port:     parseInt(process.env.DB_PORT) || 5432,
+  user:     process.env.DB_USER     || "cafeteria",
+  password: process.env.DB_PASSWORD || "secret",
+  database: process.env.DB_NAME     || "identity_db",
+});
+
+// Create table + seed users on startup
+async function initDB() {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS students (
+        id          SERIAL PRIMARY KEY,
+        student_id  VARCHAR(50) UNIQUE NOT NULL,
+        name        VARCHAR(100) NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role        VARCHAR(20) DEFAULT 'student',
+        created_at  TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    // Seed only if table is empty
+    const { rows } = await client.query("SELECT COUNT(*) FROM students");
+    if (parseInt(rows[0].count) === 0) {
+      const seeds = [
+        { student_id: "240041130", name: "Tonoy",  password: "tonoy123",  role: "student" },
+        { student_id: "240041132", name: "Sabin",  password: "sabin123",  role: "student" },
+        { student_id: "240041121", name: "Sakib",  password: "sakib123",  role: "student" },
+        { student_id: "admin001",     name: "Admin",  password: "admin123",  role: "admin"   },
+      ];
+
+      for (const s of seeds) {
+        const hash = await bcrypt.hash(s.password, 10);
+        await client.query(
+          "INSERT INTO students (student_id, name, password_hash, role) VALUES ($1, $2, $3, $4)",
+          [s.student_id, s.name, hash, s.role]
+        );
+      }
+      console.log("[DB] Seeded default students");
+      console.log("     220042001 / tonoy123");
+      console.log("     220042002 / sabin123");
+      console.log("     220042003 / sakib123");
+      console.log("     admin     / admin123");
+    }
+
+    console.log("[DB] PostgreSQL ready");
+  } finally {
+    client.release();
+  }
+}
+
+// ─────────────────────────────────────────
 // Metrics counters
 // ─────────────────────────────────────────
 const metrics = {
   totalRequests: 0,
-  loginSuccess: 0,
-  loginFailure: 0,
+  loginSuccess:  0,
+  loginFailure:  0,
   verifySuccess: 0,
   verifyFailure: 0,
-  errors: 0,
+  errors:        0,
   responseTimes: [],  // stores last 100 response times (ms)
 };
 
-// Middleware to count requests and track latency
 app.use((req, res, next) => {
   metrics.totalRequests++;
   const start = Date.now();
@@ -43,13 +99,12 @@ app.use((req, res, next) => {
 });
 
 // ─────────────────────────────────────────
-// Rate Limiter — 3 login attempts per minute per IP
-// (uses RATE_LIMIT_MAX and RATE_LIMIT_WINDOW_MS from .env)
+// Rate Limiter — 3 attempts per student_id per minute
 // ─────────────────────────────────────────
 const loginLimiter = rateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
   max: RATE_LIMIT_MAX,
-  keyGenerator: (req) => req.body?.email || req.ip, // rate limit per student email
+  keyGenerator: (req) => req.body?.student_id || req.ip,
   handler: (req, res) => {
     metrics.loginFailure++;
     res.status(429).json({
@@ -59,54 +114,35 @@ const loginLimiter = rateLimit({
 });
 
 // ─────────────────────────────────────────
-// In-memory users (replace with DB later)
-// ─────────────────────────────────────────
-const users = [
-  {
-    id: 1,
-    name: "Tonoy",
-    email: "tonoy@iut-dhaka.edu",
-    password: bcrypt.hashSync("tonoy123", 10),
-  },
-  {
-    id: 2,
-    name: "Sabin",
-    email: "sabin@iut-dhaka.edu",
-    password: bcrypt.hashSync("sabin123", 10),
-  },
-  {
-    id: 3,
-    name: "Sakib",
-    email: "sakib@iut-dhaka.edu",
-    password: bcrypt.hashSync("sakib123", 10),
-  },
-];
-
-// ─────────────────────────────────────────
 // ROUTES
 // ─────────────────────────────────────────
 
-// Root
 app.get("/", (req, res) => {
   res.json({ service: "Identity Provider", status: "running" });
 });
 
 // ── Health ──────────────────────────────
-// Returns 200 if service is up, 503 if something critical is down.
-// Other services (order-gateway) depend on this to start.
-app.get("/health", (req, res) => {
-  // For now we have no external dependencies (no DB/Redis connected in code).
-  // When you add Postgres/Redis, check their connection here and return 503 if down.
-  res.status(200).json({
-    status: "ok",
-    service: "identity-provider",
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString(),
-  });
+app.get("/health", async (req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    res.status(200).json({
+      status: "ok",
+      service: "identity-provider",
+      db: "connected",
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(503).json({
+      status: "unhealthy",
+      service: "identity-provider",
+      db: "disconnected",
+      error: err.message,
+    });
+  }
 });
 
 // ── Metrics ─────────────────────────────
-// Machine-readable data for the admin monitoring dashboard.
 app.get("/metrics", (req, res) => {
   const times = metrics.responseTimes;
   const avgLatency =
@@ -117,51 +153,68 @@ app.get("/metrics", (req, res) => {
   res.status(200).json({
     service: "identity-provider",
     totalRequests: metrics.totalRequests,
-    loginSuccess: metrics.loginSuccess,
-    loginFailure: metrics.loginFailure,
+    loginSuccess:  metrics.loginSuccess,
+    loginFailure:  metrics.loginFailure,
     verifySuccess: metrics.verifySuccess,
     verifyFailure: metrics.verifyFailure,
-    errors: metrics.errors,
-    avgLatencyMs: avgLatency,
-    timestamp: new Date().toISOString(),
+    errors:        metrics.errors,
+    avgLatencyMs:  avgLatency,
+    timestamp:     new Date().toISOString(),
   });
 });
 
 // ── Login ────────────────────────────────
-// Rate limited to RATE_LIMIT_MAX attempts per student email per window.
+// Body: { student_id, password }
+// Response: { message, token, name, role }
 app.post("/login", loginLimiter, async (req, res) => {
-  const { email, password } = req.body;
+  const { student_id, password } = req.body;
 
-  if (!email || !password) {
+  if (!student_id || !password) {
     metrics.loginFailure++;
-    return res.status(400).json({ message: "Email and password required" });
+    return res.status(400).json({ message: "student_id and password are required" });
   }
 
-  const user = users.find((u) => u.email === email);
-  if (!user) {
-    metrics.loginFailure++;
-    return res.status(401).json({ message: "Invalid credentials" });
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM students WHERE student_id = $1",
+      [student_id]
+    );
+
+    const user = rows[0];
+    if (!user) {
+      metrics.loginFailure++;
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (!isMatch) {
+      metrics.loginFailure++;
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, student_id: user.student_id, name: user.name, role: user.role },
+      JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || "1h" }
+    );
+
+    metrics.loginSuccess++;
+    res.json({
+      message: "Login successful",
+      token,
+      name: user.name,
+      role: user.role,
+      student_id: user.student_id,
+    });
+
+  } catch (err) {
+    console.error("[login] DB error:", err.message);
+    res.status(500).json({ message: "Internal server error" });
   }
-
-  const isMatch = await bcrypt.compare(password, user.password);
-  if (!isMatch) {
-    metrics.loginFailure++;
-    return res.status(401).json({ message: "Invalid credentials" });
-  }
-
-  const token = jwt.sign(
-    { id: user.id, email: user.email, name: user.name },
-    JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || "1h" }
-  );
-
-  metrics.loginSuccess++;
-  res.json({ message: "Login successful", token, name: user.name });
 });
 
 // ── Verify ───────────────────────────────
-// Used by other services (Order Gateway) to validate a JWT
-// without sharing the secret — they just call this endpoint.
+// Used by Order Gateway to validate tokens.
 // Expects:  Authorization: Bearer <token>
 app.get("/verify", (req, res) => {
   const authHeader = req.headers.authorization;
@@ -179,9 +232,10 @@ app.get("/verify", (req, res) => {
     res.status(200).json({
       valid: true,
       user: {
-        id: decoded.id,
-        email: decoded.email,
-        name: decoded.name,
+        id:         decoded.id,
+        student_id: decoded.student_id,
+        name:       decoded.name,
+        role:       decoded.role,
       },
     });
   } catch (err) {
@@ -190,13 +244,41 @@ app.get("/verify", (req, res) => {
   }
 });
 
+// ── Register (admin/seeding use only) ───
+// Body: { student_id, name, password, role }
+app.post("/register", async (req, res) => {
+  const { student_id, name, password, role } = req.body;
+  if (!student_id || !name || !password) {
+    return res.status(400).json({ message: "student_id, name, password required" });
+  }
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    await pool.query(
+      "INSERT INTO students (student_id, name, password_hash, role) VALUES ($1, $2, $3, $4)",
+      [student_id, name, hash, role || "student"]
+    );
+    res.status(201).json({ message: "Student registered" });
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ message: "Student ID already exists" });
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // ─────────────────────────────────────────
 // Start
 // ─────────────────────────────────────────
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`Identity Provider running on port ${PORT}`);
-  });
+  initDB()
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`[identity-provider] running on port ${PORT}`);
+      });
+    })
+    .catch((err) => {
+      console.error("[DB] Failed to initialize:", err.message);
+      console.log("[DB] Retrying in 5s...");
+      setTimeout(() => initDB().then(() => app.listen(PORT)), 5000);
+    });
 }
 
-module.exports = app;
+module.exports = { app, pool };

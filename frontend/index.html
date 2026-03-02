@@ -753,10 +753,44 @@
     50% { background-color: rgba(212, 170, 80, 0.05); }
   }
 
-  .skeleton {
-    animation: skeleton 1.5s ease-in-out infinite;
-  }
 
+
+  /* ═══ NOTIFICATION HUB MONITORING STYLES ═══ */
+  .notif-status-up { color: var(--green); }
+  .notif-status-down { color: var(--red); }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: currentColor; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  .metric-row { display: flex; justify-content: space-between; padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
+  .metric-row:last-child { border-bottom: none; }
+  .metric-label { color: var(--muted); font-size: 0.9rem; }
+  .metric-value { color: var(--accent); font-weight: 600; }
+
+  .alert-item { padding: 1rem; border-radius: 6px; margin-bottom: 0.75rem; border-left: 4px solid; }
+  .alert-error { background: rgba(255, 107, 107, 0.1); border-left-color: var(--red); }
+  .alert-success { background: rgba(74, 222, 128, 0.1); border-left-color: var(--green); }
+  .alert-critical { background: rgba(255, 107, 107, 0.2); border-left-color: var(--red); animation: alertPulse 0.6s infinite; }
+  @keyframes alertPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }
+  .alert-message { color: var(--text); font-weight: 500; margin-bottom: 0.25rem; }
+  .alert-time { color: var(--muted); font-size: 0.75rem; }
+
+  .notif-item { padding: 1rem; background: rgba(212, 170, 80, 0.05); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 0.75rem; }
+  .notif-delivered { opacity: 0.7; }
+  .notif-pending { border-color: var(--accent); }
+  .notif-header { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center; }
+  .notif-type { font-size: 0.65rem; font-weight: 700; padding: 0.25rem 0.5rem; border-radius: 3px; background: var(--accent-dim); color: var(--accent); }
+  .notif-type-order { background: rgba(74, 222, 128, 0.15); color: var(--green); }
+  .notif-type-alert { background: rgba(255, 107, 107, 0.15); color: var(--red); }
+  .notif-type-stock { background: rgba(232, 201, 122, 0.15); color: var(--blue); }
+  .notif-type-delivery { background: rgba(74, 222, 128, 0.15); color: var(--green); }
+  .notif-type-system { background: rgba(212, 170, 80, 0.15); color: var(--accent); }
+  .notif-priority { font-size: 0.65rem; font-weight: 600; padding: 0.25rem 0.5rem; border-radius: 3px; }
+  .priority-high { background: rgba(255, 107, 107, 0.2); color: var(--red); }
+  .priority-critical { background: rgba(255, 107, 107, 0.3); color: var(--red); font-weight: 700; }
+  .priority-medium { background: rgba(232, 201, 122, 0.2); color: var(--blue); }
+  .priority-low { background: rgba(212, 170, 80, 0.2); color: var(--accent); }
+  .notif-message { color: var(--text); font-size: 0.95rem; margin-bottom: 0.5rem; }
+  .notif-status { font-size: 0.8rem; color: var(--muted); display: flex; justify-content: space-between; }
 </style>
 </head>
 <body>
@@ -1418,31 +1452,66 @@
 
   <!-- SERVICE HEALTH PAGE -->
   <div id="page-service-health" class="page">
-    <div class="page-title">🏥 Service Health</div>
-    <div class="page-sub">Microservices status dashboard</div>
+    <div class="page-title">🏥 Service Health & Real-Time Monitoring</div>
+    <div class="page-sub">Microservices status dashboard with notification hub</div>
     
+    <!-- NOTIFICATION HUB REAL-TIME MONITORING -->
+    <div class="card card-accent" style="margin-bottom: 1.5rem; border: 2px solid var(--accent);">
+      <div class="section-title" style="display: flex; align-items: center; gap: 0.5rem;">
+        <span>🔔 Notification Hub (Real-Time Monitor)</span>
+        <div id="notif-hub-status" class="notif-status-up" style="margin-left: auto; font-size: 0.9rem;"></div>
+      </div>
+      
+      <!-- STATUS & METRICS -->
+      <div class="grid-2" style="gap: 1.5rem; margin-top: 1rem;">
+        <div>
+          <div style="color: var(--muted); font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.75rem; font-weight: 600;">📊 Performance Metrics</div>
+          <div id="notif-hub-metrics">
+            <div style="color: var(--muted); font-size: 0.9rem;">Loading...</div>
+          </div>
+        </div>
+        
+        <!-- ALERTS -->
+        <div>
+          <div style="color: var(--muted); font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.75rem; font-weight: 600;">⚠️ Active Alerts</div>
+          <div id="notif-hub-alerts" style="max-height: 200px; overflow-y: auto;">
+            <div style="color: var(--muted); font-size: 0.9rem;">Loading...</div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- NOTIFICATION QUEUE -->
+      <div style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border);">
+        <div style="color: var(--muted); font-size: 0.75rem; text-transform: uppercase; margin-bottom: 1rem; font-weight: 600;">📬 Notification Queue</div>
+        <div id="notif-hub-queue">
+          <div style="color: var(--muted); font-size: 0.9rem;">Loading...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- OTHER SERVICES -->
     <div class="card card-accent" style="margin-bottom:1.5rem;">
-      <div class="section-title">🟢 Services Online (5/5)</div>
+      <div class="section-title">🟢 Other Services Status (4/5)</div>
       <div class="grid-2" style="gap:1rem;margin-top:1rem;">
         <div class="stat-box" style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);">
           <div style="color:var(--green);font-size:1rem;font-weight:700;">Order Gateway</div>
           <div style="color:var(--muted);font-size:.75rem;margin-top:.5rem;">✓ Healthy</div>
-          <div style="color:var(--muted);font-size:.7rem;margin-top:.25rem;">Uptime: 30d 14h</div>
+          <div style="color:var(--muted);font-size:.7rem;margin-top:.25rem;">28ms latency</div>
         </div>
         <div class="stat-box" style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);">
           <div style="color:var(--green);font-size:1rem;font-weight:700;">Stock Service</div>
           <div style="color:var(--muted);font-size:.75rem;margin-top:.5rem;">✓ Healthy</div>
-          <div style="color:var(--muted);font-size:.7rem;margin-top:.25rem;">Memory: 234 MB</div>
+          <div style="color:var(--muted);font-size:.7rem;margin-top:.25rem;">8ms latency</div>
         </div>
         <div class="stat-box" style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);">
           <div style="color:var(--green);font-size:1rem;font-weight:700;">Kitchen Queue</div>
           <div style="color:var(--muted);font-size:.75rem;margin-top:.5rem;">✓ Healthy</div>
-          <div style="color:var(--muted);font-size:.7rem;margin-top:.25rem;">Queue: 247 orders</div>
+          <div style="color:var(--muted);font-size:.7rem;margin-top:.25rem;">45ms latency</div>
         </div>
         <div class="stat-box" style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);">
           <div style="color:var(--green);font-size:1rem;font-weight:700;">Identity Provider</div>
           <div style="color:var(--muted);font-size:.75rem;margin-top:.5rem;">✓ Healthy</div>
-          <div style="color:var(--muted);font-size:.7rem;margin-top:.25rem;">Auth: 542/s</div>
+          <div style="color:var(--muted);font-size:.7rem;margin-top:.25rem;">12ms latency</div>
         </div>
       </div>
     </div>
@@ -1632,26 +1701,13 @@ const mockApi = {
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ═══════════════════════════════════════════════════════════════════
-//  AUTH
+//  AUTH - Defined below with rate limiting
 // ═══════════════════════════════════════════════════════════════════
-function doLogin() {
-  const id = document.getElementById('login-id').value.trim();
-  const pw = document.getElementById('login-pw').value;
-  if (!id || !pw) return showLoginErr('Fill in all fields.');
 
-  const btn = document.getElementById('login-btn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Authenticating...';
+// NOTE: doLogin() is defined below after rateLimitTracker
+// to include client-side rate limiting functionality
 
-  mockApi.login(id, pw)
-    .then(({ token }) => {
-      localStorage.setItem('ds_token', token);
-      currentUser = decodeToken(token);
-      showApp();
-    })
-    .catch(e => showLoginErr(e.message))
-    .finally(() => { btn.disabled = false; btn.innerHTML = 'Login →'; });
-}
+
 
 function doLogout() {
   localStorage.removeItem('ds_token');
@@ -2758,6 +2814,249 @@ function doLogin() {
     if (user) { currentUser = user; showApp(); return; }
   }
 })();
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ENHANCED REAL-TIME NOTIFICATION HUB MONITORING SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const NotificationHubMonitor = {
+  config: {
+    maxRetries: 3,
+    retryDelay: 2000,
+    healthCheckInterval: 5000,
+    recoveryTimeout: 30000,
+    alertThreshold: 3
+  },
+
+  state: {
+    status: 'up',
+    latency: 15,
+    isRecovering: false,
+    failureCount: 0,
+    successCount: 0,
+    lastCheck: null,
+    lastError: null,
+    uptime: 0,
+    downtime: 0,
+    startTime: Date.now(),
+    recoveryAttempts: 0,
+    totalRequests: 0,
+    failedRequests: 0,
+    notifications: [],
+    alerts: []
+  },
+
+  init() {
+    console.log('🔔 [NotificationHub] Monitoring initialized');
+    this.startHealthChecks();
+    this.updateMonitoringPanel();
+  },
+
+  simulateHealthCheck() {
+    const messages = [
+      { id: 'notif-' + Date.now(), type: 'order', message: 'Order #12345 confirmed', timestamp: new Date(), priority: 'high' },
+      { id: 'notif-' + Date.now(), type: 'stock', message: 'Low stock: Samosa (10 left)', timestamp: new Date(), priority: 'medium' },
+      { id: 'notif-' + Date.now(), type: 'system', message: 'System backup completed', timestamp: new Date(), priority: 'low' },
+      { id: 'notif-' + Date.now(), type: 'delivery', message: 'Package ready for pickup', timestamp: new Date(), priority: 'high' },
+      { id: 'notif-' + Date.now(), type: 'alert', message: 'Payment gateway latency spike', timestamp: new Date(), priority: 'critical' }
+    ];
+    return messages[Math.floor(Math.random() * messages.length)];
+  },
+
+  startHealthChecks() {
+    let checkCount = 0;
+    
+    setInterval(() => {
+      checkCount++;
+      this.state.lastCheck = new Date();
+      this.state.totalRequests++;
+
+      const isSuccess = Math.random() < 0.85;
+
+      if (isSuccess) {
+        this.state.failureCount = 0;
+        this.state.successCount++;
+        this.state.latency = Math.floor(Math.random() * 50) + 5;
+        
+        if (this.state.status === 'down') {
+          this.state.status = 'up';
+          this.handleRecovery();
+        }
+      } else {
+        this.state.failedRequests++;
+        this.state.failureCount++;
+        
+        if (this.state.failureCount >= this.config.alertThreshold) {
+          this.state.status = 'down';
+          this.handleFailure();
+        }
+      }
+
+      if (checkCount % 2 === 0) {
+        const notif = this.simulateHealthCheck();
+        this.addNotification(notif);
+      }
+
+      this.updateMonitoringPanel();
+    }, this.config.healthCheckInterval);
+  },
+
+  handleRecovery() {
+    this.state.isRecovering = false;
+    this.state.recoveryAttempts = 0;
+    
+    const alert = {
+      id: 'alert-' + Date.now(),
+      type: 'success',
+      message: '✅ Notification Hub recovered',
+      timestamp: new Date(),
+      duration: 5000
+    };
+    
+    this.state.alerts.push(alert);
+    console.log('✅ [NotificationHub] Service recovered');
+    
+    setTimeout(() => {
+      this.state.alerts = this.state.alerts.filter(a => a.id !== alert.id);
+      this.updateMonitoringPanel();
+    }, alert.duration);
+  },
+
+  handleFailure() {
+    if (this.state.isRecovering) return;
+    
+    this.state.isRecovering = true;
+    this.state.recoveryAttempts++;
+    
+    const alert = {
+      id: 'alert-' + Date.now(),
+      type: 'error',
+      message: `⚠️ Notification Hub down (Attempt ${this.state.recoveryAttempts}/${this.config.maxRetries})`,
+      timestamp: new Date(),
+      autoRecover: true
+    };
+    
+    this.state.alerts.push(alert);
+    console.error('⚠️ [NotificationHub] Service down - Attempting recovery');
+    
+    if (this.state.recoveryAttempts < this.config.maxRetries) {
+      setTimeout(() => {
+        this.state.status = 'up';
+        this.handleRecovery();
+      }, this.config.retryDelay * this.state.recoveryAttempts);
+    } else {
+      alert.message = '❌ Notification Hub critical failure - Manual intervention required';
+      alert.type = 'critical';
+    }
+  },
+
+  addNotification(notif) {
+    const enhanced = {
+      ...notif,
+      id: notif.id || 'notif-' + Date.now(),
+      timestamp: new Date(),
+      status: 'pending',
+      retries: 0,
+      deliveredAt: null
+    };
+    
+    this.state.notifications.push(enhanced);
+    
+    setTimeout(() => {
+      const notification = this.state.notifications.find(n => n.id === enhanced.id);
+      if (notification && this.state.status === 'up') {
+        notification.status = 'delivered';
+        notification.deliveredAt = new Date();
+      }
+      this.updateMonitoringPanel();
+    }, 1000);
+  },
+
+  getStats() {
+    const uptime = Date.now() - this.state.startTime;
+    const successRate = this.state.totalRequests > 0 
+      ? ((this.state.totalRequests - this.state.failedRequests) / this.state.totalRequests * 100).toFixed(1)
+      : 0;
+    
+    return {
+      status: this.state.status,
+      uptime: this.formatUptime(uptime),
+      avgLatency: this.state.latency ? this.state.latency + 'ms' : 'N/A',
+      successRate: successRate + '%',
+      totalNotifications: this.state.notifications.length,
+      deliveredNotifications: this.state.notifications.filter(n => n.status === 'delivered').length,
+      pendingNotifications: this.state.notifications.filter(n => n.status === 'pending').length,
+      totalRequests: this.state.totalRequests,
+      failedRequests: this.state.failedRequests,
+      recoveryAttempts: this.state.recoveryAttempts
+    };
+  },
+
+  formatUptime(ms) {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    
+    if (days > 0) return days + 'd ' + (hours % 24) + 'h';
+    if (hours > 0) return hours + 'h ' + (minutes % 60) + 'm';
+    if (minutes > 0) return minutes + 'm ' + (seconds % 60) + 's';
+    return seconds + 's';
+  },
+
+  updateMonitoringPanel() {
+    const stats = this.getStats();
+    
+    const statusEl = document.getElementById('notif-hub-status');
+    if (statusEl) {
+      statusEl.className = 'notif-status-' + stats.status;
+      statusEl.innerHTML = `<div class="status-dot"></div><span>${stats.status === 'up' ? '🟢 Online' : '🔴 Offline'}</span>`;
+    }
+
+    const metricsEl = document.getElementById('notif-hub-metrics');
+    if (metricsEl) {
+      metricsEl.innerHTML = `
+        <div class="metric-row"><span class="metric-label">Avg Latency:</span><span class="metric-value">${stats.avgLatency}</span></div>
+        <div class="metric-row"><span class="metric-label">Success Rate:</span><span class="metric-value" style="color: ${parseFloat(stats.successRate) > 95 ? 'var(--green)' : 'var(--red)'};">${stats.successRate}</span></div>
+        <div class="metric-row"><span class="metric-label">Delivered:</span><span class="metric-value">${stats.deliveredNotifications}/${stats.totalNotifications}</span></div>
+        <div class="metric-row"><span class="metric-label">Uptime:</span><span class="metric-value">${stats.uptime}</span></div>
+      `;
+    }
+
+    const alertsEl = document.getElementById('notif-hub-alerts');
+    if (alertsEl) {
+      alertsEl.innerHTML = this.state.alerts.length === 0 
+        ? '<div style="color: var(--muted); font-size: 0.9rem;">✓ No active alerts</div>'
+        : this.state.alerts.map(alert => `
+          <div class="alert-item alert-${alert.type}">
+            <div class="alert-message">${alert.message}</div>
+            <div class="alert-time">${new Date(alert.timestamp).toLocaleTimeString()}</div>
+          </div>
+        `).join('');
+    }
+
+    const queueEl = document.getElementById('notif-hub-queue');
+    if (queueEl) {
+      const recentNotifs = this.state.notifications.slice(-5).reverse();
+      queueEl.innerHTML = recentNotifs.length === 0
+        ? '<div style="color: var(--muted); font-size: 0.9rem;">No recent notifications</div>'
+        : recentNotifs.map(n => `
+          <div class="notif-item notif-${n.status}">
+            <div class="notif-header">
+              <span class="notif-type notif-type-${n.type}">${n.type.toUpperCase()}</span>
+              <span class="notif-priority priority-${n.priority}">${n.priority}</span>
+            </div>
+            <div class="notif-message">${n.message}</div>
+            <div class="notif-status">${n.status === 'delivered' ? '✅ Delivered' : '⏳ Pending'} <span style="color: var(--muted); font-size: 0.75rem;">${new Date(n.timestamp).toLocaleTimeString()}</span></div>
+          </div>
+        `).join('');
+    }
+  }
+};
+
+// Initialize notification hub monitor
+NotificationHubMonitor.init();
+
 </script>
 </body>
 </html>

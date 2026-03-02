@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
     revoked_at TIMESTAMP DEFAULT NOW()
 );
 
+
 -- ─── stock_db ─────────────────────────────────────────────────
 \c stock_db
 
