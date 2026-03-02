@@ -1568,12 +1568,12 @@
 
 <script>
 // ═══════════════════════════════════════════════════════════════════
-//  CONFIG — Replace with real Docker service URLs
+//  CONFIG — Service URLs (uses localhost when accessed from browser)
 // ═══════════════════════════════════════════════════════════════════
 const API = {
-  identity: 'http://identity-provider:3001',
-  order:    'http://order-gateway:3000',
-  stock:    'http://stock-service:3002',
+  identity: 'http://localhost:3001',
+  order:    'http://localhost:3000',
+  stock:    'http://localhost:3002',
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1603,35 +1603,77 @@ function randomPickupTime() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  MOCK USERS
+//  IDENTITY PROVIDER HEALTH CHECK (used by admin service-health page)
 // ═══════════════════════════════════════════════════════════════════
-const USERS = {
-  'admin001':   { password: 'admin123',   role: 'admin'   },
-  '240041130':  { password: 'Tonoy130',   role: 'student' },
-  '240041132':  { password: 'Sabin132',   role: 'student' },
-  '240041121':  { password: 'Sakib121',   role: 'student' },
-};
+async function checkIdentityProviderHealth() {
+  try {
+    const res  = await fetch(`${API.identity}/health`);
+    const data = await res.json();
+    return { ok: res.ok, ...data };
+  } catch (e) {
+    return { ok: false, status: 'unreachable', error: e.message };
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════
-//  FAKE JWT HELPERS
+//  JWT HELPERS — decode real JWT from identity-provider
 // ═══════════════════════════════════════════════════════════════════
-function makeToken(payload) {
-  const encoded = btoa(JSON.stringify(payload));
-  return `header.${encoded}.signature`;
-}
 function decodeToken(token) {
-  try { return JSON.parse(atob(token.split('.')[1])); } catch { return null; }
+  try {
+    // Real JWT: header.payload.signature  — payload is base64url encoded
+    const base64Url = token.split('.')[1];
+    const base64    = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonStr   = decodeURIComponent(
+      atob(base64).split('').map(c =>
+        '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+      ).join('')
+    );
+    const payload = JSON.parse(jsonStr);
+    // Normalise field names: server uses student_id, UI uses studentId
+    return {
+      studentId: payload.student_id || payload.studentId,
+      name:      payload.name,
+      role:      payload.role,
+      id:        payload.id,
+    };
+  } catch { return null; }
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  MOCK API  (swap fetch() calls here when backend is ready)
+//  MOCK API  (login uses real identity-provider; others remain mock)
 // ═══════════════════════════════════════════════════════════════════
 const mockApi = {
-  login: (id, pw) => delay(600).then(() => {
-    const u = USERS[id];
-    if (!u || u.password !== pw) throw new Error('Invalid credentials');
-    return { token: makeToken({ studentId: id, role: u.role }) };
-  }),
+  // ── REAL: hits identity-provider:3001/login ──────────────────────
+  login: async (id, pw) => {
+    const res = await fetch(`${API.identity}/login`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ student_id: id, password: pw }),
+    });
+
+    // Surface rate-limit header info for the UI monitor
+    const remaining = res.headers.get('X-RateLimit-Remaining');
+    const resetAt   = res.headers.get('X-RateLimit-Reset');
+    if (remaining !== null) {
+      window._rateLimitRemaining = parseInt(remaining);
+      window._rateLimitReset     = parseInt(resetAt);
+    }
+
+    const data = await res.json();
+
+    if (res.status === 429) {
+      const err = new Error(data.message || 'Too many login attempts.');
+      err.status    = 429;
+      err.retryAfter = data.retryAfter || 60;
+      throw err;
+    }
+    if (!res.ok) {
+      throw new Error(data.message || 'Invalid credentials');
+    }
+
+    // Server returns { token, name, role, student_id }
+    return { token: data.token, name: data.name, role: data.role, student_id: data.student_id };
+  },
   getStock: () => {
     if (window._stockItems) return Promise.resolve(window._stockItems);
     return delay(400).then(() => {
@@ -2747,13 +2789,13 @@ const rateLimitUI = {
   }
 };
 
-// Enhanced doLogin that respects client-side rate limiting
+// Enhanced doLogin — real identity-provider + client-side rate limiting
 function doLogin() {
   const id = document.getElementById('login-id').value.trim();
   const pw = document.getElementById('login-pw').value;
   if (!id || !pw) return showLoginErr('Fill in all fields.');
 
-  // Check rate limit
+  // Client-side pre-check (mirrors server-side Redis window)
   const status = rateLimitTracker.getAttempts(id);
   if (status.blocked) {
     rateLimitUI.update(status.attempts, 3, true, status.unblockIn);
@@ -2761,8 +2803,6 @@ function doLogin() {
     showLoginErr(`🔒 Too many failed attempts. Try again in ${status.unblockIn} seconds.`);
     return;
   }
-  
-  // Show monitor if approaching limit
   if (status.attempts >= 2) {
     rateLimitUI.update(status.attempts, 3, false, 0);
     rateLimitUI.show();
@@ -2773,28 +2813,38 @@ function doLogin() {
   btn.innerHTML = '<span class="spinner"></span> Authenticating...';
 
   mockApi.login(id, pw)
-    .then(({ token }) => {
+    .then(({ token, name, role, student_id }) => {
+      // Store the real JWT issued by the server
       localStorage.setItem('ds_token', token);
       currentUser = decodeToken(token);
+      // Fallback in case decode misses something
+      if (!currentUser) currentUser = { studentId: student_id, name, role };
       rateLimitTracker.reset(id);
       rateLimitUI.close();
       showApp();
     })
     .catch(e => {
-      // Increment attempts on failure
-      const result = rateLimitTracker.increment(id);
-      const remaining = 3 - result.attempts;
-      
-      if (result.blocked) {
-        const status = rateLimitTracker.getAttempts(id);
-        rateLimitUI.update(result.attempts, 3, true, status.unblockIn);
+      if (e.status === 429) {
+        // Server-side rate limit hit — sync client tracker and show timer
+        const retryAfter = e.retryAfter || 60;
+        rateLimitUI.update(3, 3, true, retryAfter);
         rateLimitUI.show();
-        showLoginErr(`🔒 Account locked. Try again in ${status.unblockIn} seconds.`);
+        showLoginErr(`🔒 Account locked by server. Try again in ${retryAfter} seconds.`);
       } else {
-        const msg = remaining > 0 ? ` (${remaining} attempt${remaining===1?'':'s'} remaining)` : '';
-        showLoginErr(e.message + msg);
-        rateLimitUI.update(result.attempts, 3, false, 0);
-        if (remaining <= 1) rateLimitUI.show();
+        // Increment client-side tracker on wrong password
+        const result    = rateLimitTracker.increment(id);
+        const remaining = 3 - result.attempts;
+        if (result.blocked) {
+          const s = rateLimitTracker.getAttempts(id);
+          rateLimitUI.update(result.attempts, 3, true, s.unblockIn);
+          rateLimitUI.show();
+          showLoginErr(`🔒 Account locked. Try again in ${s.unblockIn} seconds.`);
+        } else {
+          const hint = remaining > 0 ? ` (${remaining} attempt${remaining === 1 ? '' : 's'} remaining)` : '';
+          showLoginErr(e.message + hint);
+          rateLimitUI.update(result.attempts, 3, false, 0);
+          if (remaining <= 1) rateLimitUI.show();
+        }
       }
     })
     .finally(() => { btn.disabled = false; btn.innerHTML = 'Login →'; });
@@ -2804,15 +2854,35 @@ function doLogin() {
 //  INITIALIZE RATE LIMIT UI & AUTO-LOGIN
 // ═══════════════════════════════════════════════════════════════════
 (function init() {
-  // Initialize rate limit monitor UI
   rateLimitUI.init();
-  
-  // Check for existing token (auto-login)
+
   const token = localStorage.getItem('ds_token');
-  if (token) {
-    const user = decodeToken(token);
-    if (user) { currentUser = user; showApp(); return; }
-  }
+  if (!token) return;
+
+  // Verify the stored JWT is still valid against the real server
+  fetch(`${API.identity}/verify`, {
+    headers: { 'Authorization': 'Bearer ' + token }
+  })
+    .then(res => res.json())
+    .then(data => {
+      if (data.valid && data.user) {
+        currentUser = {
+          studentId: data.user.student_id,
+          name:      data.user.name,
+          role:      data.user.role,
+          id:        data.user.id,
+        };
+        showApp();
+      } else {
+        localStorage.removeItem('ds_token');
+      }
+    })
+    .catch(() => {
+      // Server unreachable — fall back to decoding locally so offline dev still works
+      const user = decodeToken(token);
+      if (user) { currentUser = user; showApp(); }
+      else localStorage.removeItem('ds_token');
+    });
 })();
 
 // ═══════════════════════════════════════════════════════════════════════════════
