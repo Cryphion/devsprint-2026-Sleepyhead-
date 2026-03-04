@@ -1,4 +1,8 @@
-version: "3.9"
+# ─────────────────────────────────────────────
+#  DevSprint 2026 — CI Test Compose
+#  Uses lightweight mocks for stock & kitchen.
+#  Run: docker compose -f docker-compose.test.yml up --build
+# ─────────────────────────────────────────────
 
 services:
   order-gateway:
@@ -11,7 +15,9 @@ services:
       - JWT_SECRET=test-secret-key
       - REDIS_URL=redis://redis:6379
       - STOCK_SERVICE_URL=http://stock-mock:3002
-      - KITCHEN_SERVICE_URL=http://kitchen-mock:3003
+      - KITCHEN_QUEUE_URL=http://kitchen-mock:3003
+      - IDENTITY_PROVIDER_URL=http://localhost:3001
+      - NOTIFICATION_HUB_URL=http://localhost:3004
       - NODE_ENV=test
     depends_on:
       redis:
@@ -21,7 +27,7 @@ services:
       kitchen-mock:
         condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 5
