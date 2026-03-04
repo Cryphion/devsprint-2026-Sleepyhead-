@@ -26,9 +26,42 @@ const NOTIFICATION_HUB_URL = process.env.NOTIFICATION_HUB_URL  || "http://notifi
 const REDIS_URL            = process.env.REDIS_URL             || "redis://redis:6379";
 const CACHE_TTL_SECONDS    = parseInt(process.env.CACHE_TTL_SECONDS || "30");
 
-// ── REDIS ─────────────────────────────────────────────────────────────────────
+// ── REDIS (commands) ──────────────────────────────────────────────────────────
 const redis = new Redis(REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 3 });
 redis.on("error", (err) => console.error("[Redis] Connection error:", err.message));
+
+// ── REDIS (publisher — separate connection required for pub/sub) ──────────────
+const NOTIFICATION_CHANNEL = "order_updates";
+const publisher = new Redis(REDIS_URL, {
+  lazyConnect: false,
+  retryStrategy(times) {
+    return Math.min(times * 200, 5000);
+  },
+});
+publisher.on("connect", () => console.log("[Notifier] Redis publisher connected"));
+publisher.on("error",   (err) => console.warn("[Notifier] Redis publisher error:", err.message));
+
+/**
+ * Publish an order status update to the notification-hub via Redis pub/sub.
+ * Notification-hub's subscriber.js picks this up and pushes it to the
+ * student's WebSocket in real-time.
+ * Non-fatal — a Redis blip must never block order processing.
+ *
+ * @param {string} orderId
+ * @param {string} studentId
+ * @param {string} status  "Pending" | "Stock Verified" | "In Kitchen" | "Ready" | "Failed"
+ */
+async function publishStatus(orderId, studentId, status) {
+  try {
+    await publisher.publish(
+      NOTIFICATION_CHANNEL,
+      JSON.stringify({ orderId, studentId, status, timestamp: new Date().toISOString() })
+    );
+    console.log(`[Notifier] ${orderId} → "${status}" for student ${studentId}`);
+  } catch (err) {
+    console.warn(`[Notifier] Publish failed for ${orderId}: ${err.message}`);
+  }
+}
 
 // ── IN-MEMORY METRICS ─────────────────────────────────────────────────────────
 const metrics = {
@@ -74,7 +107,6 @@ function requireAuth(req, res, next) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /health
-// docker-compose healthcheck: wget -qO- http://localhost:3000/health || exit 1
 // ─────────────────────────────────────────────────────────────────────────────
 app.get("/health", async (req, res) => {
   const checks = {
@@ -95,9 +127,7 @@ app.get("/health", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /health/all
-// Called by Script.js: mockApi.getHealth() → Admin "Service Health" page
-// Returns: [{ name, status: "up"|"down", latency: number|null }]
+// GET /health/all  — Admin dashboard service health grid
 // ─────────────────────────────────────────────────────────────────────────────
 app.get("/health/all", async (req, res) => {
   const services = [
@@ -138,13 +168,7 @@ app.get("/metrics", (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /metrics/json
-// Called by Script.js: mockApi.getMetrics() → Admin "Performance" page
-//
-// Pulls authoritative cook counts from kitchen-queue:3003/metrics
-// kitchen-queue/metrics.js returns: { totalProcessed, totalFailures, avgLatencyMs, uptime }
-// Script.js expects:                { totalOrders,    failures,      avgLatency          }
-// Falls back to gateway counters if kitchen-queue is unreachable.
+// GET /metrics/json  — Admin performance page
 // ─────────────────────────────────────────────────────────────────────────────
 app.get("/metrics/json", async (req, res) => {
   const gwAvg = metrics.gateway_latency_count > 0
@@ -170,12 +194,7 @@ app.get("/metrics/json", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /stock
-// Called by Script.js: mockApi.getStock() → Student "Order" page menu
-//
-// Cache-first (Redis TTL = CACHE_TTL_SECONDS). Absorbs thundering herd.
-// stock-service returns: [{ id, name, quantity, price }]
-// Script.js expects:     [{ id, name, stock,    price }]
+// GET /stock  — Student order menu (cache-first)
 // ─────────────────────────────────────────────────────────────────────────────
 app.get("/stock", requireAuth, async (req, res) => {
   try {
@@ -188,10 +207,10 @@ app.get("/stock", requireAuth, async (req, res) => {
     const mapped = data.map((item) => ({
       id:    String(item.id),
       name:  item.name,
-      stock: item.quantity,   // rename quantity → stock for Script.js
+      stock: item.quantity,
       price: item.price ?? 0,
     }));
-    try { await redis.set("stock:all", JSON.stringify(mapped), "EX", CACHE_TTL_SECONDS); } catch { /* cache write failure — non-fatal */ }
+    try { await redis.set("stock:all", JSON.stringify(mapped), "EX", CACHE_TTL_SECONDS); } catch { /* non-fatal */ }
     return res.json(mapped);
   } catch (err) {
     console.error("[StockService] GET /api/stocks error:", err.message);
@@ -200,9 +219,7 @@ app.get("/stock", requireAuth, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /stock/update
-// Called by Script.js: mockApi.updateStock() → Admin "Manage Stock" page
-// Busts Redis cache after update so students see fresh stock immediately.
+// POST /stock/update  — Admin stock management
 // ─────────────────────────────────────────────────────────────────────────────
 app.post("/stock/update", requireAuth, async (req, res) => {
   const { itemId, quantity } = req.body;
@@ -215,7 +232,7 @@ app.post("/stock/update", requireAuth, async (req, res) => {
       { quantity },
       { timeout: 5000 }
     );
-    try { await redis.del("stock:all"); await redis.del(`stock:${itemId}`); } catch { /* cache bust failure — non-fatal */ }
+    try { await redis.del("stock:all"); await redis.del(`stock:${itemId}`); } catch { /* non-fatal */ }
     return res.json(data);
   } catch (err) {
     console.error("[StockService] PUT /api/stocks error:", err.message);
@@ -224,17 +241,17 @@ app.post("/stock/update", requireAuth, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /orders
-// Called by Script.js: mockApi.placeOrder() → Student "Order" page
+// POST /orders  — Main order placement endpoint
 //
 // Pipeline:
-//   1. requireAuth middleware    — 401 if JWT missing/invalid
-//   2. Redis fast cache check    — instant reject if cached stock < qty
-//   3. GET  stock/:id            — fetch qty + version (optimistic lock)
-//   4. PATCH stock/:id/deduct    — atomic deduction with version check
-//   5. POST kitchen-queue:3003/order → publishOrder() → RabbitMQ
-//      worker.js: processOrder() → notify() → notification-hub:3004 → WebSocket
-//   6. Return 200 { orderId, status:"Pending" } immediately — async cooking
+//   1. requireAuth          — 401 if JWT missing/invalid
+//   2. Redis cache check    — instant reject if cached stock < qty
+//   3. GET  stock/:id       — fetch qty + version (optimistic lock)
+//   4. PATCH stock/deduct   — atomic deduction with version check
+//   5. Publish "Pending"    → Redis order_updates → notification-hub → WebSocket
+//   6. POST kitchen-queue   — async cooking begins
+//   7. Publish "Stock Verified" → Redis (after kitchen ACKs)
+//   8. Return 200 immediately — student doesn't wait for cooking
 // ─────────────────────────────────────────────────────────────────────────────
 app.post("/orders", requireAuth, async (req, res) => {
   let orderItems = Array.isArray(req.body.items)
@@ -253,7 +270,10 @@ app.post("/orders", requireAuth, async (req, res) => {
     }
   }
 
-  // ── Step 1: Fast Redis cache check ───────────────────────────────────────
+  // JWT from identity-provider uses student_id; handle both spellings
+  const studentId = req.user.student_id || req.user.studentId || req.user.id;
+
+  // ── Step 1: Fast Redis cache check ─────────────────────────────────────────
   for (const { itemId, quantity } of orderItems) {
     try {
       const cached = await redis.get(`stock:${itemId}`);
@@ -266,7 +286,7 @@ app.post("/orders", requireAuth, async (req, res) => {
     } catch { /* cache unavailable — fall through */ }
   }
 
-  // ── Steps 2 & 3: Fetch version then deduct per item ──────────────────────
+  // ── Steps 2 & 3: Fetch version then deduct per item ────────────────────────
   for (const { itemId, quantity } of orderItems) {
     let currentItem;
     try {
@@ -294,7 +314,7 @@ app.post("/orders", requireAuth, async (req, res) => {
       try {
         await redis.set(`stock:${itemId}`, String(deductResult.quantity), "EX", CACHE_TTL_SECONDS);
         await redis.del("stock:all");
-      } catch { /* cache update failure — non-fatal */ }
+      } catch { /* non-fatal */ }
     } catch (err) {
       const status = err.response?.status;
       if (status === 409) {
@@ -310,31 +330,34 @@ app.post("/orders", requireAuth, async (req, res) => {
     }
   }
 
-  // ── Step 4: Forward to Kitchen Queue ─────────────────────────────────────
+  // ── Step 4: Generate orderId & immediately ACK the student ─────────────────
   const orderId = "ORD-" + Math.random().toString(36).substr(2, 6).toUpperCase();
 
-  // JWT from identity-provider uses student_id; handle both spellings
-  const studentId = req.user.student_id || req.user.studentId || req.user.id;
+  // Respond immediately — student sees "Pending" in <2s
+  res.status(200).json({ message: "Order accepted", orderId, status: "Pending" });
 
+  // ── Step 5: Publish "Pending" → notification-hub → student WebSocket ───────
+  await publishStatus(orderId, studentId, "Pending");
+
+  // ── Step 6: Forward to Kitchen Queue (async — response already sent) ───────
   try {
-    // kitchen-queue/index.js: app.post("/order", ...)
-    // kitchen-queue/index.js destructures: { orderId, studentId, items }
     await axios.post(
       `${KITCHEN_QUEUE_URL}/order`,
       { orderId, studentId, items: orderItems },
       { timeout: 5000 }
     );
     console.log(`[Gateway] Order ${orderId} → Kitchen Queue (student: ${studentId})`);
+
+    // ── Step 7: Kitchen ACKed → stock is verified, cooking starts ────────────
+    await publishStatus(orderId, studentId, "Stock Verified");
+
   } catch (err) {
-    // Non-fatal: stock already deducted. RabbitMQ durability handles retry.
+    // Non-fatal: stock already deducted, RabbitMQ durability handles retry
     console.error(`[Gateway] Kitchen Queue unreachable for order ${orderId}:`, err.message);
+    await publishStatus(orderId, studentId, "Failed");
   }
 
   metrics.gateway_orders_placed++;
-
-  // Script.js mockApi.placeOrder() reads data.orderId
-  // "Pending" matches ORDER_STEPS[0] in Script.js
-  return res.status(200).json({ message: "Order accepted", orderId, status: "Pending" });
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────

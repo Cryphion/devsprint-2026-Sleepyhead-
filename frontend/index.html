@@ -1816,6 +1816,11 @@ function doLogout() {
   localStorage.removeItem('ds_token');
   currentUser = null;
   clearInterval(statusTimer);
+  if (notificationSocket) {           // ← add this block
+    notificationSocket.onclose = null;
+    notificationSocket.close();
+    notificationSocket = null;
+  }
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('app-shell').style.display    = 'none';
   document.getElementById('login-id').value = '';
@@ -1837,6 +1842,7 @@ function showApp() {
   document.getElementById('app-shell').style.display    = 'block';
   buildNavbar();
   updateUserInfo();
+  connectNotificationHub();  // ← add this line
   navTo(currentUser.role === 'admin' ? 'admin-dashboard' : 'student-order');
 }
 
@@ -3195,10 +3201,66 @@ const NotificationHubMonitor = {
     }
   }
 };
-
-// Initialize notification hub monitor
 NotificationHubMonitor.init();
+// ═══════════════════════════════════════════════════════════════
+//  NOTIFICATION HUB — WebSocket Client
+// ═══════════════════════════════════════════════════════════════
+const WS_URL = "ws://localhost:3004";
+let notificationSocket = null;
 
+function connectNotificationHub() {
+  if (notificationSocket && notificationSocket.readyState === WebSocket.OPEN) return;
+
+  notificationSocket = new WebSocket(WS_URL);
+
+  notificationSocket.onopen = () => {
+    // Register so the hub routes pushes to this student
+    notificationSocket.send(JSON.stringify({
+      type: "register",
+      studentId: currentUser.studentId,
+    }));
+    console.log("[WS] Registered with Notification Hub as", currentUser.studentId);
+  };
+
+  notificationSocket.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === "order_update") handleOrderUpdate(msg);
+    } catch (e) {
+      console.error("[WS] Bad message:", e);
+    }
+  };
+
+  notificationSocket.onclose = () => {
+    console.warn("[WS] Disconnected — retrying in 3s");
+    setTimeout(connectNotificationHub, 3000);
+  };
+}
+
+// Maps server status strings → ORDER_STEPS indices
+const STATUS_TO_STEP = {
+  "Pending":        0,
+  "Stock Verified": 1,
+  "In Kitchen":     2,
+  "Ready":          3,
+};
+
+function handleOrderUpdate({ status }) {
+  const step = STATUS_TO_STEP[status];
+  if (step === undefined || step <= statusStep) return;
+
+  statusStep = step;
+  updateTracker();
+  updatePickupTracker();
+
+  if (status === "Ready") {
+    clearInterval(statusTimer);
+    const b1 = document.getElementById("ready-banner");
+    const b2 = document.getElementById("pickup-ready-banner");
+    if (b1) b1.style.display = "block";
+    if (b2) b2.style.display = "block";
+  }
+}
 </script>
 </body>
 </html>

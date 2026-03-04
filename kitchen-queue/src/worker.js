@@ -1,3 +1,18 @@
+"use strict";
+
+/**
+ * worker.js — Kitchen Queue
+ * --------------------------
+ * RabbitMQ consumer. Processes orders end-to-end:
+ *   1. Idempotency check  — skip duplicates (handles RabbitMQ redelivery)
+ *   2. Notify "In Kitchen" → Redis → notification-hub → student WebSocket
+ *   3. Simulate cooking   (PREP_TIME_MIN_MS – PREP_TIME_MAX_MS)
+ *   4. Notify "Ready"     → Redis → notification-hub → student WebSocket
+ *
+ * studentId is required in the job payload so notify() can route the
+ * WebSocket push to the correct student's browser.
+ */
+
 const { consumeOrders } = require("./rabbitmq");
 const { isAlreadyProcessed, markProcessing, markDone } = require("./idempotency");
 const { notify } = require("./notify");
@@ -28,10 +43,10 @@ function simulateCooking(ms) {
  * @param {object} order — { orderId, studentId, items, enqueuedAt }
  */
 async function processOrder(order) {
-  const { orderId } = order;
+  const { orderId, studentId } = order;
   const startTime = Date.now();
 
-  console.log(`[Worker] Received order ${orderId}`);
+  console.log(`[Worker] Received order ${orderId} for student ${studentId}`);
 
   // ── Idempotency check ──────────────────────────────────────────────────────
   // Handles the case where RabbitMQ redelivers a message after a crash.
@@ -45,17 +60,18 @@ async function processOrder(order) {
   // Mark BEFORE doing any work — crash-safe flag in Redis
   await markProcessing(orderId);
 
-  // ── Notify: order acknowledged by kitchen ──────────────────────────────────
-  await notify(orderId, "In Kitchen");
+  // ── Notify: order is now being prepared by kitchen ─────────────────────────
+  // studentId is required so notification-hub routes the WS push correctly
+  await notify(orderId, studentId, "In Kitchen");
 
   // ── Simulate cooking ───────────────────────────────────────────────────────
   const prepTime = randomBetween(PREP_TIME_MIN, PREP_TIME_MAX);
   console.log(`[Worker] Cooking order ${orderId} for ${prepTime}ms...`);
   await simulateCooking(prepTime);
 
-  // ── Mark done & notify ready ───────────────────────────────────────────────
+  // ── Mark done & notify student their order is ready ────────────────────────
   await markDone(orderId);
-  await notify(orderId, "Ready");
+  await notify(orderId, studentId, "Ready");
 
   const elapsed = Date.now() - startTime;
   recordSuccess(elapsed);
@@ -77,8 +93,12 @@ async function startWorker() {
     } catch (err) {
       recordFailure();
       console.error(`[Worker] Failed processing order ${order?.orderId}:`, err.message);
-      // Notify frontend so the student isn't left waiting
-      await notify(order?.orderId, "Failed").catch(() => {});
+
+      // Notify student so they aren't left waiting indefinitely
+      if (order?.orderId && order?.studentId) {
+        await notify(order.orderId, order.studentId, "Failed").catch(() => {});
+      }
+
       // Re-throw so rabbitmq.js sends a NACK
       throw err;
     }
